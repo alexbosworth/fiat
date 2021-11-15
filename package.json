@@ -1,0 +1,35 @@
+{
+  "author": {
+    "name": "Alex Bosworth",
+    "url": "https://twitter.com/alexbosworth"
+  },
+  "bugs": {
+    "url": "https://github.com/alexbosworth/fiat/issues"
+  },
+  "dependencies": {
+    "async": "3.2.2",
+    "asyncjs-util": "1.2.7"
+  },
+  "description": "Fiat rates library",
+  "devDependencies": {
+    "@alexbosworth/tap": "15.0.10"
+  },
+  "engines": {
+    "node": ">=12"
+  },
+  "keywords": [
+    "currency",
+    "rates"
+  ],
+  "license": "MIT",
+  "main": "index.js",
+  "name": "@alexbosworth/fiat",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/alexbosworth/fiat.git"
+  },
+  "scripts": {
+    "test": "tap --branches=1 --functions=1 --lines=1 --statements=1 -t 60 test/coinbase/*.js test/coindesk/*.js test/coingecko/*.js test/rates/*.js"
+  },
+  "version": "1.0.0"
+}
