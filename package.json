@@ -7,8 +7,8 @@
     "url": "https://github.com/alexbosworth/fiat/issues"
   },
   "dependencies": {
-    "async": "3.2.3",
-    "asyncjs-util": "1.2.9"
+    "async": "3.2.4",
+    "asyncjs-util": "1.2.10"
   },
   "description": "Fiat rates library",
   "devDependencies": {
@@ -31,5 +31,5 @@
   "scripts": {
     "test": "tap --branches=1 --functions=1 --lines=1 --statements=1 -t 60 test/coinbase/*.js test/coindesk/*.js test/coingecko/*.js test/rates/*.js"
   },
-  "version": "1.0.2"
+  "version": "1.0.3"
 }
