@@ -1,4 +1,6 @@
-const {test} = require('@alexbosworth/tap');
+const {deepStrictEqual} = require('node:assert').strict;
+const {rejects} = require('node:assert').strict;
+const test = require('node:test');
 
 const {getCoingeckoRates} = require('./../../coingecko');
 
@@ -72,20 +74,20 @@ const tests = [
 ];
 
 tests.forEach(({args, description, error, expected}) => {
-  return test(description, async ({end, equal, rejects}) => {
+  return test(description, async () => {
     if (!!error) {
-      rejects(getCoingeckoRates(args), error, 'Got expected error');
+      await rejects(getCoingeckoRates(args), error, 'Got expected error');
 
-      return end();
+      return;
     }
 
     const [expectedTicker] = expected.tickers;
     const [ticker] = (await getCoingeckoRates(args)).tickers;
 
-    equal(!!ticker.date, true, 'Got ticker date');
-    equal(ticker.rate, expectedTicker.rate, 'Got expected ticker rate');
-    equal(ticker.ticker, expectedTicker.ticker, 'Got expected symbol');
+    deepStrictEqual(!!ticker.date, true, 'Got ticker date');
+    deepStrictEqual(ticker.rate, expectedTicker.rate, 'Got expected rate');
+    deepStrictEqual(ticker.ticker, expectedTicker.ticker, 'Got symbol');
 
-    return end();
+    return;
   });
 });

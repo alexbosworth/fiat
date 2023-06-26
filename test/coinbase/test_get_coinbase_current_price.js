@@ -1,4 +1,6 @@
-const {test} = require('@alexbosworth/tap');
+const {deepStrictEqual} = require('node:assert').strict;
+const {rejects} = require('node:assert').strict;
+const test = require('node:test');
 
 const {getCoinbaseCurrentPrice} = require('./../../coinbase');
 
@@ -60,16 +62,16 @@ const tests = [
 ];
 
 tests.forEach(({args, description, error, expected}) => {
-  return test(description, async ({end, equal, rejects}) => {
+  return test(description, async () => {
     if (!!error) {
       await rejects(getCoinbaseCurrentPrice(args), error, 'Got error');
     } else {
       const {cents, date} = await getCoinbaseCurrentPrice(args);
 
-      equal(cents, expected.cents, 'Got expected exchange rate');
-      equal(!!date, true, 'Got a date value');
+      deepStrictEqual(cents, expected.cents, 'Got expected exchange rate');
+      deepStrictEqual(!!date, true, 'Got a date value');
     }
 
-    return end();
+    return;
   });
 });

@@ -1,4 +1,6 @@
-const {test} = require('@alexbosworth/tap');
+const {deepStrictEqual} = require('node:assert').strict;
+const {rejects} = require('node:assert').strict;
+const test = require('node:test');
 
 const method = require('./../../rates/get_prices');
 
@@ -62,15 +64,15 @@ const tests = [
 ];
 
 tests.forEach(({args, description, error, expected}) => {
-  return test(description, async ({end, equal, rejects}) => {
+  return test(description, async () => {
     if (!!error) {
       await rejects(method(args), error, 'Got expected error');
     } else {
       const [{rate}] = (await method(args)).tickers;
 
-      equal(rate, expected.rate, 'Got expected exchange rate');
+      deepStrictEqual(rate, expected.rate, 'Got expected exchange rate');
     }
 
-    return end();
+    return;
   });
 });
