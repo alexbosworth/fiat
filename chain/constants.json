@@ -1,0 +1,26 @@
+{
+  "blockHeaderByteLength": 80,
+  "blockHeaderHexLength": 160,
+  "centsPerDollar": 100,
+  "confirmationsAfterDay": 6,
+  "defaultMaxPrice": 10000000,
+  "defaultMinPrice": 100,
+  "fetchLimit": 4,
+  "half": 0.5,
+  "kernelBins": 2,
+  "maxTokens": 10000000000000,
+  "minAliasMargin": 1,
+  "minTokens": 1000,
+  "msPerDay": 86400000,
+  "msPerSecond": 1000,
+  "noiseRadius": 12,
+  "roundTokensMultiple": 1000,
+  "sampleLogInterval": 10,
+  "spikeKernel": [0.3, 0.7, 1, 0.7, 0.3],
+  "tokensPerBigUnit": 100000000,
+  "unpricedErrors": [
+    "ExpectedPaymentOutputsInBlocksToGetPrice",
+    "FailedToDerivePriceFromOutputs",
+    "FailedToDerivePriceInWidenedWindow"
+  ]
+}

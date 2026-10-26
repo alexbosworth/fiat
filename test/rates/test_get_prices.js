@@ -45,6 +45,16 @@ const tests = [
     error: [400, 'UnsupportedFiatTypeForCoindeskFiatRateLookup'],
   },
   {
+    args: makeArgs({date: 'yesterday', from: 'coinbase'}),
+    description: 'A valid date is required for rates at a date',
+    error: [400, 'ExpectedValidDateToGetExchangeRatesAtDate'],
+  },
+  {
+    args: makeArgs({date: '2017-12-17T10:30:00Z'}),
+    description: 'Rates at a date come from Coinbase',
+    error: [400, 'ExpectedCoinbaseRateProviderForRatesAtDate'],
+  },
+  {
     args: makeArgs({}),
     description: 'Rate is returned',
     expected: {rate: 100},
@@ -75,4 +85,26 @@ tests.forEach(({args, description, error, expected}) => {
 
     return;
   });
+});
+
+test('Rates at the hour of a date are returned', async () => {
+  const dayStart = Date.parse('2017-12-17T00:00:00.000Z') / 1000;
+
+  // Coinbase has a candle for the 10:00 hour of the day
+  const candles = [[dayStart + 60 * 60 * 10, 18900, 19200, 19000, 19200, 5]];
+
+  const {tickers} = await method({
+    date: '2017-12-17T10:30:00Z',
+    from: 'coinbase',
+    request: makeRequest(null, {statusCode: 200}, candles),
+    symbols: ['EUR'],
+  });
+
+  deepStrictEqual(
+    tickers,
+    [{date: '2017-12-17T10:00:00.000Z', rate: 1910000, ticker: 'EUR'}],
+    'The rate is the price of the hour of the date'
+  );
+
+  return;
 });

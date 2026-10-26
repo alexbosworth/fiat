@@ -1,3 +1,4 @@
+const {chainRates} = require('./chain');
 const {getPrices} = require('./rates');
 
-module.exports = {getPrices};
+module.exports = {chainRates, getPrices};

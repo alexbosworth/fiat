@@ -1,0 +1,5 @@
+{
+  "msPerSecond": 1000,
+  "secondsPerDay": 86400,
+  "supportedFiats": ["EUR", "GBP", "USD"]
+}

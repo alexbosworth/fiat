@@ -1,32 +1,53 @@
 {
+  "allowScripts": {
+    "protobufjs@7.6.6": true
+  },
   "author": {
     "name": "Alex Bosworth",
-    "url": "https://twitter.com/alexbosworth"
+    "url": "https://x.com/alexbosworth"
   },
   "bugs": {
     "url": "https://github.com/alexbosworth/fiat/issues"
   },
   "dependencies": {
-    "async": "3.2.4",
-    "asyncjs-util": "1.2.12"
+    "@alexbosworth/blockchain": "4.12.0",
+    "async": "3.2.6",
+    "asyncjs-util": "1.2.12",
+    "ln-service": "60.1.7"
   },
   "description": "Fiat rates library",
   "engines": {
-    "node": ">=16"
+    "node": ">=22"
   },
+  "files": [
+    "CHANGELOG.md",
+    "arrays",
+    "chain",
+    "coinbase",
+    "coindesk",
+    "coingecko",
+    "dates",
+    "docs",
+    "index.js",
+    "rates",
+    "storage"
+  ],
   "keywords": [
     "currency",
     "rates"
   ],
   "license": "MIT",
-  "main": "index.js",
   "name": "@alexbosworth/fiat",
   "repository": {
     "type": "git",
-    "url": "https://github.com/alexbosworth/fiat.git"
+    "url": "git+https://github.com/alexbosworth/fiat.git"
   },
   "scripts": {
-    "test": "npx nyc@15.1 node --experimental-test-coverage --test"
+    "check-prices": "node scripts/check_prices.js",
+    "prepublishOnly": "node scripts/check_known_prices.js",
+    "test": "node --experimental-test-coverage --test test/arrays/*.js test/chain/*.js test/coinbase/*.js test/coindesk/*.js test/coingecko/*.js test/dates/*.js test/rates/*.js test/storage/*.js",
+    "test-all": "node --experimental-test-coverage --test test/arrays/*.js test/chain/*.js test/coinbase/*.js test/coindesk/*.js test/coingecko/*.js test/dates/*.js test/rates/*.js test/slow/*.js test/storage/*.js",
+    "update-known-prices": "node scripts/update_known_prices.js"
   },
-  "version": "2.0.0"
+  "version": "3.0.0"
 }
