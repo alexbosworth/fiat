@@ -23,8 +23,8 @@ const types = ['priors', 'provisional', 'rates'];
     }
     path: <Prices File Path String>
     removed: [{
+      block_id: <Last Block Id Hex String>
       day: <Day YYYY-MM-DD String>
-      hash: <Last Block Hash Hex String>
     }]
   }
 
@@ -56,12 +56,12 @@ module.exports = ({estimates, fs, path, removed}, cbk) => {
 
       // Forget the estimates that are kept in memory
       forget: ['validate', ({}, cbk) => {
-        removed.forEach(({day, hash}) => {
+        removed.forEach(removal => {
           types.filter(type => !!estimates[type]).forEach(type => {
-            const known = estimates[type][day];
+            const known = estimates[type][removal.day];
 
-            if (!!known && known.hash === hash) {
-              delete estimates[type][day];
+            if (!!known && known.block_id === removal.block_id) {
+              delete estimates[type][removal.day];
             }
           });
         });

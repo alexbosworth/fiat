@@ -44,9 +44,7 @@ module.exports = (args, cbk) => {
     return asyncAuto({
       // Estimate the price of the day from its own blocks
       getEstimate: cbk => {
-        const {guide} = args;
-
-        const bounds = !guide ? {} : priceWindow({cents: guide.cents});
+        const bounds = !args.guide ? {} : priceWindow(args.guide);
 
         return estimateDayPrice({
           date: args.date,

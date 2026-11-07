@@ -1,11 +1,20 @@
-const {deepStrictEqual} = require('node:assert').strict;
+const {deepEqual} = require('node:assert').strict;
+const {mock} = require('node:test');
 const {rejects} = require('node:assert').strict;
 const test = require('node:test');
 
 const method = require('./../../rates/get_prices');
 
+const dayStart = Date.parse('2017-12-17T00:00:00.000Z') / 1000;
 const makeRequest = (err, r, body) => ({}, cbk) => cbk(err, r, body);
+const now = '2024-01-01T00:00:00.000Z';
 const updatedISO = '2020-01-13T20:13:00+00:00';
+
+// Rates without a time of their own are at the time of the clock
+mock.timers.enable({apis: ['Date'], now: Date.parse(now)});
+
+// Coinbase has a candle for the 10:00 hour of the day
+const candles = [[dayStart + 60 * 60 * 10, 18900, 19200, 19000, 19200, 5]];
 
 const makeArgs = override => {
   const args = {
@@ -57,7 +66,9 @@ const tests = [
   {
     args: makeArgs({}),
     description: 'Rate is returned',
-    expected: {rate: 100},
+    expected: {
+      tickers: [{date: '2020-01-13T20:13:00.000Z', rate: 100, ticker: 'USD'}],
+    },
   },
   {
     args: makeArgs({
@@ -69,7 +80,23 @@ const tests = [
       ),
     }),
     description: 'Batch rates are returned',
-    expected: {rate: 100},
+    expected: {tickers: [{date: now, rate: 100, ticker: 'USD'}]},
+  },
+  {
+    args: makeArgs({
+      date: '2017-12-17T10:30:00Z',
+      from: 'coinbase',
+      request: makeRequest(null, {statusCode: 200}, candles),
+      symbols: ['EUR'],
+    }),
+    description: 'Rates at the hour of a date are returned',
+    expected: {
+      tickers: [{
+        date: '2017-12-17T10:00:00.000Z',
+        rate: 1910000,
+        ticker: 'EUR',
+      }],
+    },
   },
 ];
 
@@ -78,33 +105,9 @@ tests.forEach(({args, description, error, expected}) => {
     if (!!error) {
       await rejects(method(args), error, 'Got expected error');
     } else {
-      const [{rate}] = (await method(args)).tickers;
-
-      deepStrictEqual(rate, expected.rate, 'Got expected exchange rate');
+      deepEqual(await method(args), expected, 'Got expected rates');
     }
 
     return;
   });
-});
-
-test('Rates at the hour of a date are returned', async () => {
-  const dayStart = Date.parse('2017-12-17T00:00:00.000Z') / 1000;
-
-  // Coinbase has a candle for the 10:00 hour of the day
-  const candles = [[dayStart + 60 * 60 * 10, 18900, 19200, 19000, 19200, 5]];
-
-  const {tickers} = await method({
-    date: '2017-12-17T10:30:00Z',
-    from: 'coinbase',
-    request: makeRequest(null, {statusCode: 200}, candles),
-    symbols: ['EUR'],
-  });
-
-  deepStrictEqual(
-    tickers,
-    [{date: '2017-12-17T10:00:00.000Z', rate: 1910000, ticker: 'EUR'}],
-    'The rate is the price of the hour of the date'
-  );
-
-  return;
 });

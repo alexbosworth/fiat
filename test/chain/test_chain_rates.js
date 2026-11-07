@@ -1,7 +1,5 @@
-const {deepEqual} = require('node:assert').strict;
 const {rejects} = require('node:assert').strict;
 const test = require('node:test');
-const {throws} = require('node:assert').strict;
 
 const {makeChain: makeFixtureChain} = require('./../fixtures');
 const method = require('./../../chain/chain_rates');
@@ -13,17 +11,31 @@ const genesis = Date.parse('2030-01-01T00:00:00.000Z') / 1000;
 
 const makeChain = args => makeFixtureChain(Object.assign({genesis}, args));
 
+const chain = makeChain({});
+
+// A chain with few payments in its blocks, to price a day quickly
+const lightChain = makeChain({payments_per_block: 5});
+
+// LND for the chain that is not expected to be asked for any blocks
+const unusedBlocksLnd = {
+  blocks: Object.assign({}, chain.lnd.blocks, {
+    getBlock: () => {
+      throw new Error('UnexpectedFetchOfBlock');
+    },
+  }),
+  chain: chain.lnd.chain,
+};
+
 // An in-memory file system
 const makeFs = args => {
-  const {files} = args;
-
   return {
     getFile: (path, cbk) => {
-      if (!files[path]) {
+      // Exit early when there is no file at the path
+      if (!args.files[path]) {
         return cbk({code: 'ENOENT'});
       }
 
-      return cbk(null, Buffer.from(files[path]));
+      return cbk(null, Buffer.from(args.files[path]));
     },
     makeDirectory: (path, cbk) => cbk(),
     renameFile: (from, to, cbk) => {
@@ -31,25 +43,21 @@ const makeFs = args => {
         return cbk('err');
       }
 
-      files[to] = files[from];
+      args.files[to] = args.files[from];
 
-      delete files[from];
+      delete args.files[from];
 
       return cbk();
     },
     writeFile: (path, contents, cbk) => {
-      if (!!args.is_write_failing) {
-        return cbk('err');
-      }
-
-      files[path] = contents;
+      args.files[path] = contents;
 
       return cbk();
     },
   };
 };
 
-const makeArgs = overrides => {
+const makeRatesArgs = overrides => {
   const args = {path, fs: makeFs({files: {}}), lnd: makeChain({}).lnd};
 
   Object.keys(overrides).forEach(k => args[k] = overrides[k]);
@@ -57,123 +65,110 @@ const makeArgs = overrides => {
   return args;
 };
 
-const priceAt = ({date, getChainRate}) => {
-  return new Promise((resolve, reject) => {
-    return getChainRate({date, currency: 'BTC', fiat: 'USD'}, (err, res) => {
-      return !!err ? reject(err) : resolve(res);
-    });
-  });
+const makeArgs = overrides => {
+  const args = {
+    lookup: {currency: 'BTC', date: chain.day(1), fiat: 'USD'},
+    rates: makeRatesArgs({lnd: unusedBlocksLnd}),
+  };
+
+  Object.keys(overrides).forEach(k => args[k] = overrides[k]);
+
+  return args;
 };
+
+// Make the chain rates method and look up a rate with it
+const lookupRate = ({lookup, rates}) => new Promise((resolve, reject) => {
+  const {getChainRate} = method(rates);
+
+  return getChainRate(lookup, (err, res) => {
+    return !!err ? reject(err) : resolve(res);
+  });
+});
+
+// Dates that are not readable dates on days of the calendar
+const invalidDates = ['yesterday', '2024-01-01not-a-date', '2024-02-30'];
 
 const tests = [
   {
-    args: makeArgs({fs: undefined}),
+    args: makeArgs({rates: makeRatesArgs({fs: undefined})}),
     description: 'File system methods are required',
-    error: 'ExpectedFileSystemMethodsToMakeChainRates',
+    error: new Error('ExpectedFileSystemMethodsToMakeChainRates'),
   },
   {
-    args: makeArgs({fs: {getFile: () => {}}}),
+    args: makeArgs({rates: makeRatesArgs({fs: {getFile: () => {}}})}),
     description: 'Complete file system methods are required',
-    error: 'ExpectedFileSystemMethodsToMakeChainRates',
+    error: new Error('ExpectedFileSystemMethodsToMakeChainRates'),
   },
   {
-    args: makeArgs({lnd: undefined}),
+    args: makeArgs({rates: makeRatesArgs({lnd: undefined})}),
     description: 'LND is required',
-    error: 'ExpectedAuthenticatedLndToMakeChainRates',
+    error: new Error('ExpectedAuthenticatedLndToMakeChainRates'),
   },
   {
-    args: makeArgs({path: undefined}),
+    args: makeArgs({rates: makeRatesArgs({path: undefined})}),
     description: 'A prices file path is required',
-    error: 'ExpectedPricesFilePathToMakeChainRates',
+    error: new Error('ExpectedPricesFilePathToMakeChainRates'),
   },
-];
+  {
+    args: makeArgs({rates: makeRatesArgs({blocks_path: path})}),
+    description: 'The blocks file has to be apart from the prices file',
+    error: new Error('ExpectedBlocksPathOtherThanPricesPathToMakeChainRates'),
+  },
+  {
+    args: makeArgs({
+      lookup: {currency: 'LTC', date: chain.day(1), fiat: 'USD'},
+    }),
+    description: 'The currency to look up a rate for must be BTC',
+    error: [400, 'UnsupportedCurrencyToGetChainRate'],
+  },
+  {
+    args: makeArgs({lookup: {currency: 'BTC', fiat: 'USD'}}),
+    description: 'A date is required to look up a rate',
+    error: [400, 'ExpectedDateToGetChainRate'],
+  },
+  {
+    args: makeArgs({
+      lookup: {currency: 'BTC', date: chain.day(1), fiat: 'EUR'},
+    }),
+    description: 'The fiat currency to look up a rate in must be USD',
+    error: [400, 'UnsupportedFiatToGetChainRate'],
+  },
+  {
+    args: makeArgs({
+      lookup: {currency: 'BTC', date: '2021-10-19T23:59:59.999Z', fiat: 'USD'},
+    }),
+    description: 'A date must be in the supported range',
+    error: [400, 'DateBeforeSupportedRangeToGetChainRate', {
+      earliest_day: '2021-10-20',
+    }],
+  },
+  {
+    args: makeArgs({
+      rates: makeRatesArgs({fs: makeFs({files: {[path]: 'not json'}})}),
+    }),
+    description: 'A corrupt prices file is an error',
+    error: [503, 'FailedToParsePricesFile'],
+  },
+  {
+    args: makeArgs({
+      rates: makeRatesArgs({
+        fs: makeFs({files: {}, is_rename_failing: true}),
+        lnd: lightChain.lnd,
+      }),
+    }),
+    description: 'A failure to swap in the prices file is an error',
+    error: [503, 'FailedToReplacePricesFile'],
+  },
+].concat(invalidDates.map(date => ({
+  args: makeArgs({lookup: {date, currency: 'BTC', fiat: 'USD'}}),
+  description: `${date} is not a date that a rate can be looked up for`,
+  error: [400, 'ExpectedValidDateToGetChainRate'],
+})));
 
 tests.forEach(({args, description, error}) => {
-  return test(description, () => {
-    throws(() => method(args), new Error(error), 'Got expected error');
+  return test(description, async () => {
+    await rejects(lookupRate(args), error, 'Got expected error');
 
     return;
   });
-});
-
-test('Rate lookup arguments are validated', async () => {
-  const chain = makeChain({});
-
-  const {getChainRate} = method(makeArgs({lnd: chain.lnd}));
-
-  const lookup = args => new Promise((resolve, reject) => {
-    return getChainRate(args, (err, res) => {
-      return !!err ? reject(err) : resolve(res);
-    });
-  });
-
-  await rejects(
-    lookup({currency: 'LTC', date: chain.day(1), fiat: 'USD'}),
-    [400, 'UnsupportedCurrencyToGetChainRate'],
-    'Currency must be BTC'
-  );
-
-  await rejects(
-    lookup({currency: 'BTC', fiat: 'USD'}),
-    [400, 'ExpectedDateToGetChainRate'],
-    'Date is required'
-  );
-
-  await rejects(
-    lookup({currency: 'BTC', date: chain.day(1), fiat: 'EUR'}),
-    [400, 'UnsupportedFiatToGetChainRate'],
-    'Fiat must be USD'
-  );
-
-  const invalid = ['yesterday', '2024-01-01not-a-date', '2024-02-30'];
-
-  for (const date of invalid) {
-    await rejects(
-      lookup({date, currency: 'BTC', fiat: 'USD'}),
-      [400, 'ExpectedValidDateToGetChainRate'],
-      'Date must be a readable date on a day of the calendar'
-    );
-  }
-
-  await rejects(
-    lookup({currency: 'BTC', date: '2021-10-19T23:59:59.999Z', fiat: 'USD'}),
-    [400, 'DateBeforeSupportedRangeToGetChainRate', {
-      earliest_day: '2021-10-20',
-    }],
-    'Date must be in the supported range'
-  );
-
-  deepEqual(chain.calls.blocks, 0, 'No blocks are fetched for bad lookups');
-
-  return;
-});
-
-test('A corrupt prices file is an error', async () => {
-  const fs = makeFs({files: {}});
-
-  fs.getFile = (path, cbk) => cbk(null, Buffer.from('not json'));
-
-  const {getChainRate} = method(makeArgs({fs}));
-
-  await rejects(
-    priceAt({getChainRate, date: makeChain({}).day(1)}),
-    [503, 'FailedToParsePricesFile'],
-    'Got expected error'
-  );
-
-  return;
-});
-
-test('A failure to swap in the prices file is an error', async () => {
-  const fs = makeFs({files: {}, is_rename_failing: true});
-
-  const {getChainRate} = method(makeArgs({fs}));
-
-  await rejects(
-    priceAt({getChainRate, date: makeChain({}).day(1)}),
-    [503, 'FailedToReplacePricesFile'],
-    'Got expected error'
-  );
-
-  return;
 });

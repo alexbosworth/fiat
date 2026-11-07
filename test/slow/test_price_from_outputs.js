@@ -1,9 +1,9 @@
 const {deepEqual} = require('node:assert').strict;
-const {ok} = require('node:assert').strict;
 const test = require('node:test');
 
-const method = require('./../../chain/outputs/price_from_outputs');
+const priceFromOutputs = require('./../../chain/outputs/price_from_outputs');
 
+const {abs} = Math;
 const centsPerDollar = 100;
 const tokensPerBigUnit = 1e8;
 
@@ -61,60 +61,87 @@ const makeOutputs = ({price, scale, seed}) => {
   return outputs.filter(n => n > 1000);
 };
 
-test('Values just off a round BTC amount are capped when asked', () => {
-  const cents = 6170 * centsPerDollar;
-  const outputs = makeOutputs({price: 6170, seed: 5});
-  const random = makeRandom(6);
-
-  // Round amounts of BTC sent with the fee taken out of the amount
-  for (let i = 0; i < 4000; i++) {
-    outputs.push(1e6 - Math.round(1500 + random() * 1500));
-  }
-
-  const plain = method({outputs});
-  const capped = method({outputs, is_capping_near_round: true});
-
-  const strong = capped.spikes.filter(n => n.strength >= 0.2);
-
-  ok(Math.abs(plain.cents / cents - 1) > 0.5, 'The cluster pulls the price');
-  ok(Math.abs(capped.cents / cents - 1) < 0.005, 'Capped, the price is found');
-  ok(strong.length >= 3, 'The capped price rests on a pattern');
-
-  return;
+// Round amounts of BTC sent with the fee taken out of the amount
+const makeFeesTakenOut = ({random}) => [...Array(4000).keys()].map(() => {
+  return 1e6 - Math.round(1500 + random() * 1500);
 });
 
-test('A flood of a few repeated amounts does not pull the price', () => {
-  const cents = 80400 * centsPerDollar;
-  const payments = makeOutputs({price: 80400, seed: 7});
+// A flood of transactions that repeat a few small amounts through the day
+const flood = {
+  1046: 12086,
+  1186: 9014,
+  1346: 5922,
+  1506: 5894,
+  1666: 4222,
+  1826: 4014,
+  1986: 1619,
+  2146: 308,
+};
 
-  // Estimates are made in a window around the price
-  const estimate = args => {
-    return method(Object.assign({max_price: 97000, min_price: 50000}, args));
-  };
+const repeats = Object.keys(flood).map(tokens => {
+  return Array(flood[tokens]).fill(Number(tokens));
+});
 
-  // A flood of transactions that repeat a few small amounts through the day
-  const flood = {
-    1046: 12086,
-    1186: 9014,
-    1346: 5922,
-    1506: 5894,
-    1666: 4222,
-    1826: 4014,
-    1986: 1619,
-    2146: 308,
-  };
+// Estimates are made in a window around the price
+const estimate = args => priceFromOutputs(Object.assign({
+  max_price: 97000,
+  min_price: 50000,
+},
+args));
 
-  const repeats = Object.keys(flood).map(tokens => {
-    return Array(flood[tokens]).fill(Number(tokens));
+const tests = [
+  {
+    args: {
+      cents: 6170 * centsPerDollar,
+      outputs: makeOutputs({price: 6170, seed: 5}).concat(makeFeesTakenOut({
+        random: makeRandom(6),
+      })),
+    },
+    description: 'Values just off a round BTC amount are capped when asked',
+    expected: {is_found: true, is_patterned: true, is_pulled: true},
+    method: ({cents, outputs}) => {
+      const plain = priceFromOutputs({outputs});
+      const capped = priceFromOutputs({outputs, is_capping_near_round: true});
+
+      const strong = capped.spikes.filter(n => n.strength >= 0.2);
+
+      return {
+        is_found: abs(capped.cents / cents - 1) < 0.005,
+        is_patterned: strong.length >= 3,
+        is_pulled: abs(plain.cents / cents - 1) > 0.5,
+      };
+    },
+  },
+  {
+    args: {
+      cents: 80400 * centsPerDollar,
+      outputs: makeOutputs({price: 80400, seed: 7}),
+    },
+    description: 'A flood of a few repeated amounts does not pull the price',
+    expected: {
+      hundred_strength: 1,
+      is_found: true,
+      is_kept_out: true,
+      is_significant: true,
+    },
+    method: ({cents, outputs}) => {
+      const flooded = estimate({outputs: outputs.concat(...repeats)});
+      const steady = estimate({outputs});
+
+      return {
+        hundred_strength: flooded.spikes.find(n => n.usd === 100).strength,
+        is_found: abs(flooded.cents / cents - 1) < 0.005,
+        is_kept_out: abs(flooded.cents / steady.cents - 1) < 0.001,
+        is_significant: flooded.significance > 4,
+      };
+    },
+  },
+];
+
+tests.forEach(({args, description, expected, method}) => {
+  return test(description, () => {
+    deepEqual(method(args), expected, 'Got expected price');
+
+    return;
   });
-
-  const flooded = estimate({outputs: payments.concat(...repeats)});
-  const steady = estimate({outputs: payments});
-
-  ok(Math.abs(flooded.cents / cents - 1) < 0.005, 'The price is found');
-  ok(flooded.significance > 4, 'The payments stand out');
-  deepEqual(flooded.spikes.find(n => n.usd === 100).strength, 1, 'Strongest');
-  ok(Math.abs(flooded.cents / steady.cents - 1) < 0.001, 'Flood is kept out');
-
-  return;
 });

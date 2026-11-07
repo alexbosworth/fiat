@@ -6,8 +6,32 @@ const method = require('./../../chain/histogram/histogram_excess');
 
 const {abs} = Math;
 const flat = Array(50).fill(1);
+const {max} = Math;
 
 const spiked = flat.map((n, i) => i === 25 ? 5 : n);
+
+// Shares that repeat and include empty bins
+const shares = [...Array(80).keys()].map(n => n * 7919 % 31 % 9 / 10);
+
+// The background of each bin from sorting all of its neighbors, and the
+// excess of each bin over its background
+const sortedMedians = ({exclude, radius}) => {
+  const background = shares.map((share, bin) => {
+    const neighbors = shares
+      .filter((n, i) => abs(i - bin) > exclude && abs(i - bin) <= radius)
+      .sort((a, b) => a - b);
+
+    return !neighbors.length ? 0 : neighbors[(neighbors.length - 1) >>> 1];
+  });
+
+  return {
+    background,
+    excess: shares.map((share, bin) => max(0, share - background[bin])),
+  };
+};
+
+// Reaches and exclusions to find the backgrounds of the shares with
+const reaches = [[0, 1], [2, 12], [3, 3], [5, 2], [2, 80]];
 
 const tests = [
   {
@@ -35,7 +59,11 @@ const tests = [
     description: 'The background reach and exclusion can be set',
     expected: {background: [1, 1, 1, 1, 1], excess: [0, 0, 8, 0, 0]},
   },
-];
+].concat(reaches.map(([exclude, radius]) => ({
+  args: {exclude, radius, bins: shares},
+  description: `Lower median backgrounds, reach ${radius} past ${exclude}`,
+  expected: sortedMedians({exclude, radius}),
+})));
 
 tests.forEach(({args, description, error, expected}) => {
   return test(description, () => {
@@ -47,28 +75,4 @@ tests.forEach(({args, description, error, expected}) => {
 
     return;
   });
-});
-
-test('The background is the lower median of the neighbors of a bin', () => {
-  // Shares that repeat and include empty bins
-  const bins = [...Array(80).keys()].map(n => n * 7919 % 31 % 9 / 10);
-
-  // The background of each bin from sorting all of its neighbors
-  const sortedMedians = ({exclude, radius}) => bins.map((share, bin) => {
-    const neighbors = bins
-      .filter((n, i) => abs(i - bin) > exclude && abs(i - bin) <= radius)
-      .sort((a, b) => a - b);
-
-    return !neighbors.length ? 0 : neighbors[(neighbors.length - 1) >>> 1];
-  });
-
-  [[0, 1], [2, 12], [3, 3], [5, 2], [2, 80]].forEach(([exclude, radius]) => {
-    const {background} = method({bins, exclude, radius});
-
-    deepEqual(background, sortedMedians({exclude, radius}), 'Got median');
-
-    return;
-  });
-
-  return;
 });

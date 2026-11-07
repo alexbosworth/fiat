@@ -1,4 +1,5 @@
 const {deepEqual} = require('node:assert').strict;
+const {ok} = require('node:assert').strict;
 const {rejects} = require('node:assert').strict;
 const test = require('node:test');
 
@@ -6,14 +7,24 @@ const method = require('./../../storage/put_prices_file');
 
 const path = '/data/prices.json';
 
-const makeFs = args => {
-  const {files} = args;
+// The prices that are written for the default arguments
+const written = {
+  priors: {'2024-01-02': {cents: 2}},
+  provisional: {},
+  rates: {'2024-01-01': {cents: 1}},
+  version: 2,
+};
 
+// An in-memory file system
+const makeFs = args => {
   return {
     getFile: (path, cbk) => {
-      const missing = {code: 'ENOENT'};
+      // Exit early when there is no file at the path
+      if (!args.files[path]) {
+        return cbk({code: 'ENOENT'});
+      }
 
-      return !files[path] ? cbk(missing) : cbk(null, Buffer.from(files[path]));
+      return cbk(null, Buffer.from(args.files[path]));
     },
     makeDirectory: (path, cbk) => cbk(),
     renameFile: (from, to, cbk) => {
@@ -21,9 +32,9 @@ const makeFs = args => {
         return cbk('err');
       }
 
-      files[to] = files[from];
+      args.files[to] = args.files[from];
 
-      delete files[from];
+      delete args.files[from];
 
       return cbk();
     },
@@ -32,7 +43,43 @@ const makeFs = args => {
         return cbk('err');
       }
 
-      files[path] = contents;
+      args.files[path] = contents;
+
+      return cbk();
+    },
+  };
+};
+
+// A file system with a prices file that is not to be written over
+const makeKeptFs = ({contents, err}) => ({
+  getFile: (file, cbk) => !err ? cbk(null, Buffer.from(contents)) : cbk(err),
+  makeDirectory: (directory, cbk) => cbk(),
+  renameFile: () => {
+    throw new Error('UnexpectedSwapOfPricesFile');
+  },
+  writeFile: () => {
+    throw new Error('UnexpectedWriteOfPricesFile');
+  },
+});
+
+// A file system that checks the prices are written to a temporary file next
+// to the prices file, which then takes the place of the prices file
+const makeCheckedFs = ({expected}) => {
+  const temps = [];
+
+  return {
+    getFile: (file, cbk) => cbk({code: 'ENOENT'}),
+    makeDirectory: (directory, cbk) => cbk(),
+    renameFile: (from, to, cbk) => {
+      deepEqual({from, to}, {to: path, from: temps[0]}, 'Swapped into place');
+
+      return cbk();
+    },
+    writeFile: (file, contents, cbk) => {
+      ok(file.startsWith(`${path}.${process.pid}.`), 'Written next to it');
+      deepEqual(JSON.parse(contents), expected, 'The prices are written');
+
+      temps.push(file);
 
       return cbk();
     },
@@ -74,49 +121,6 @@ const tests = [
     error: [400, 'ExpectedRatesToPutPricesFile'],
   },
   {
-    args: makeArgs({fs: makeFs({files: {}, is_write_failing: true})}),
-    description: 'Errors writing the file are passed back',
-    error: [503, 'FailedToWritePricesFile'],
-  },
-  {
-    args: makeArgs({fs: makeFs({files: {}, is_rename_failing: true})}),
-    description: 'Errors swapping in the file are passed back',
-    error: [503, 'FailedToReplacePricesFile'],
-  },
-  {
-    args: makeArgs({}),
-    description: 'Prices are written to the file',
-    expected: {
-      priors: {'2024-01-02': {cents: 2}},
-      provisional: {},
-      rates: {'2024-01-01': {cents: 1}},
-      version: 1,
-    },
-  },
-  {
-    args: makeArgs({
-      fs: makeFs({
-        files: {
-          [path]: JSON.stringify({
-            priors: {'2024-01-02': {cents: 3}, '2024-01-03': {cents: 4}},
-            rates: {'2024-01-02': {cents: 5}, '2024-01-04': {cents: 6}},
-          }),
-        },
-      }),
-    }),
-    description: 'Prices are merged with the prices already in the file',
-    expected: {
-      priors: {'2024-01-03': {cents: 4}},
-      provisional: {},
-      rates: {
-        '2024-01-01': {cents: 1},
-        '2024-01-02': {cents: 5},
-        '2024-01-04': {cents: 6},
-      },
-      version: 1,
-    },
-  },
-  {
     args: makeArgs({provisional: 'provisional'}),
     description: 'Provisional prices are expected to be an object',
     error: [400, 'ExpectedProvisionalPricesToPutPricesFile'],
@@ -142,6 +146,73 @@ const tests = [
     error: [400, 'ExpectedRatesToPutPricesFile'],
   },
   {
+    args: makeArgs({removed: 'removed'}),
+    description: 'Removed prices are expected to be an array',
+    error: [400, 'ExpectedRemovedPricesToPutPricesFile'],
+  },
+  {
+    args: makeArgs({fs: makeKeptFs({contents: 'not json'})}),
+    description: 'A file that cannot be parsed is not written over',
+    error: [503, 'FailedToParsePricesFile'],
+  },
+  {
+    args: makeArgs({fs: makeKeptFs({err: {code: 'EACCES'}})}),
+    description: 'A file that cannot be read is not written over',
+    error: [503, 'FailedToReadPricesFile', {err: {code: 'EACCES'}}],
+  },
+  {
+    args: makeArgs({fs: makeFs({files: {}, is_write_failing: true})}),
+    description: 'Errors writing the file are passed back',
+    error: [503, 'FailedToWritePricesFile'],
+  },
+  {
+    args: makeArgs({fs: makeFs({files: {}, is_rename_failing: true})}),
+    description: 'Errors swapping in the file are passed back',
+    error: [503, 'FailedToReplacePricesFile'],
+  },
+  {
+    args: makeArgs({fs: makeCheckedFs({expected: written})}),
+    description: 'Prices are written to a temporary file that is swapped in',
+    expected: written,
+  },
+  {
+    args: makeArgs({
+      fs: makeFs({
+        files: {
+          [path]: JSON.stringify({
+            priors: {'2024-01-02': {cents: 3}, '2024-01-03': {cents: 4}},
+            rates: {'2024-01-02': {cents: 5}, '2024-01-04': {cents: 6}},
+          }),
+        },
+      }),
+    }),
+    description: 'Prices are merged with the prices already in the file',
+    expected: {
+      priors: {'2024-01-03': {cents: 4}},
+      provisional: {},
+      rates: {
+        '2024-01-01': {cents: 1},
+        '2024-01-02': {cents: 5},
+        '2024-01-04': {cents: 6},
+      },
+      version: 2,
+    },
+  },
+  {
+    args: makeArgs({
+      fs: makeFs({
+        files: {
+          [path]: JSON.stringify({
+            rates: {'2024-01-04': {cents: 6}},
+            version: 1,
+          }),
+        },
+      }),
+    }),
+    description: 'Prices in an earlier format are replaced',
+    expected: written,
+  },
+  {
     args: makeArgs({
       fs: makeFs({
         files: {
@@ -161,7 +232,7 @@ const tests = [
         '2024-01-01': {cents: 1},
         '2024-01-02': {cents: 5, version: 'old'},
       },
-      version: 1,
+      version: 2,
     },
   },
   {
@@ -182,13 +253,8 @@ const tests = [
       priors: {'2024-01-02': {cents: 2}},
       provisional: {'2024-01-04': {blocks: [1, 2], cents: 3}},
       rates: {'2024-01-01': {cents: 1}},
-      version: 1,
+      version: 2,
     },
-  },
-  {
-    args: makeArgs({removed: 'removed'}),
-    description: 'Removed prices are expected to be an array',
-    error: [400, 'ExpectedRemovedPricesToPutPricesFile'],
   },
   {
     args: makeArgs({
@@ -196,15 +262,15 @@ const tests = [
         files: {
           [path]: JSON.stringify({
             rates: {
-              '2024-01-03': {cents: 3, hash: 'aa'},
-              '2024-01-04': {cents: 4, hash: 'bb'},
+              '2024-01-03': {block_id: 'aa', cents: 3},
+              '2024-01-04': {block_id: 'bb', cents: 4},
             },
           }),
         },
       }),
       removed: [
-        {day: '2024-01-03', hash: 'aa'},
-        {day: '2024-01-04', hash: 'cc'},
+        {block_id: 'aa', day: '2024-01-03'},
+        {block_id: 'cc', day: '2024-01-04'},
       ],
     }),
     description: 'A removed price is only taken out when it is the same',
@@ -213,9 +279,9 @@ const tests = [
       provisional: {},
       rates: {
         '2024-01-01': {cents: 1},
-        '2024-01-04': {cents: 4, hash: 'bb'},
+        '2024-01-04': {block_id: 'bb', cents: 4},
       },
-      version: 1,
+      version: 2,
     },
   },
   {
@@ -244,7 +310,7 @@ const tests = [
         '2024-01-05': {blocks: [10, 25], cents: 8},
       },
       rates: {'2024-01-01': {cents: 1}},
-      version: 1,
+      version: 2,
     },
   },
 ];
@@ -253,65 +319,10 @@ tests.forEach(({args, description, error, expected}) => {
   return test(description, async () => {
     if (!!error) {
       await rejects(method(args), error, 'Got expected error');
-
-      return;
+    } else {
+      deepEqual(await method(args), expected, 'Got expected result');
     }
-
-    const res = await method(args);
-
-    deepEqual(res, expected, 'Got expected result');
-
-    args.fs.getFile(path, (err, res) => {
-      deepEqual(JSON.parse(res.toString()), expected, 'File is written');
-    });
 
     return;
   });
-});
-
-test('A file that cannot be read is not written over', async () => {
-  const files = {[path]: 'not json'};
-
-  const unparsed = method(makeArgs({fs: makeFs({files})}));
-
-  await rejects(unparsed, [503, 'FailedToParsePricesFile'], 'Parse error');
-
-  deepEqual(files, {[path]: 'not json'}, 'A file not parsed is left alone');
-
-  const fs = makeFs({files});
-
-  fs.getFile = (path, cbk) => cbk({code: 'EACCES'});
-
-  await rejects(method(makeArgs({fs})), [503, 'FailedToReadPricesFile']);
-
-  deepEqual(files, {[path]: 'not json'}, 'A file not read is left alone');
-
-  return;
-});
-
-test('Each write has its own temporary file', async () => {
-  const files = {};
-  const temps = [];
-
-  const fs = makeFs({files});
-
-  const {writeFile} = fs;
-
-  fs.writeFile = (path, contents, cbk) => {
-    temps.push(path);
-
-    return writeFile(path, contents, cbk);
-  };
-
-  await method(makeArgs({fs}));
-  await method(makeArgs({fs}));
-
-  const prefix = `${path}.${process.pid}.`;
-
-  deepEqual(temps.length, 2, 'Each write uses a temporary file');
-  deepEqual(temps[0] !== temps[1], true, 'The temporary files differ');
-  deepEqual(temps.every(n => n.startsWith(prefix)), true, 'Named by process');
-  deepEqual(Object.keys(files), [path], 'Only the prices file is left');
-
-  return;
 });

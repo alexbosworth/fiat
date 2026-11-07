@@ -2,7 +2,7 @@ const asyncAuto = require('async/auto');
 const {returnResult} = require('asyncjs-util');
 
 const estimateRecord = require('./estimate_record');
-const {getBlockHash} = require('./../blocks');
+const {getBlockId} = require('./../blocks');
 const getPriceFromBlocks = require('./get_price_from_blocks');
 const isAliasRatio = require('./is_alias_ratio');
 const isSupportedEstimate = require('./is_supported_estimate');
@@ -14,12 +14,14 @@ const {unpricedErrors} = require('./../constants');
 /** Derive and remember a provisional price for an incomplete day
 
   {
+    [blocks]: <Retrieved Blocks By Height Map Object>
     day: <Day YYYY-MM-DD String>
     estimates: {
       priors: {<Day YYYY-MM-DD String>: <Estimate Object>}
       provisional: {<Day YYYY-MM-DD String>: <Estimate Object>}
       rates: {<Day YYYY-MM-DD String>: <Estimate Object>}
     }
+    [fetched]: <Block Fetched Function> ({height}) => {}
     heights: [<Block Height Number>]
     lnd: <Authenticated LND API Object>
     [logger]: <Winston Logger Object>
@@ -52,7 +54,9 @@ module.exports = (args, cbk) => {
         const bounds = !estimate ? {} : priceWindow({cents: estimate.cents});
 
         return getPriceFromBlocks({
+          blocks: args.blocks,
           date: args.day,
+          fetched: args.fetched,
           heights: args.heights,
           lnd: args.lnd,
           logger: args.logger,
@@ -115,15 +119,15 @@ module.exports = (args, cbk) => {
         return cbk();
       }],
 
-      // Get the hash of the last block
-      getHash: ['checkPrice', ({}, cbk) => {
+      // Get the id of the last block
+      getId: ['checkPrice', ({}, cbk) => {
         const [last] = args.heights.slice(-1);
 
-        return getBlockHash({height: last, lnd: args.lnd}, cbk);
+        return getBlockId({height: last, lnd: args.lnd}, cbk);
       }],
 
       // Remember the provisional price
-      remember: ['getHash', 'getPrice', ({getHash, getPrice}, cbk) => {
+      remember: ['getId', 'getPrice', ({getId, getPrice}, cbk) => {
         const [first] = args.heights;
         const [last] = args.heights.slice(-1);
 
@@ -131,6 +135,7 @@ module.exports = (args, cbk) => {
           date: args.day,
           estimate: {
             agreement: getPrice.agreement,
+            block_id: getId.id,
             blocks: [first, last],
             cents: getPrice.cents,
             confidence: getPrice.confidence,
@@ -138,7 +143,6 @@ module.exports = (args, cbk) => {
             dispersion: getPrice.dispersion,
             drift: getPrice.drift,
             evidence: getPrice.evidence,
-            hash: getHash.hash,
             is_widened: getPrice.is_widened,
             outputs: getPrice.outputs,
             payments: getPrice.payments,

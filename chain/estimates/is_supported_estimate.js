@@ -32,8 +32,6 @@ const minSpikeStrength = 0.2;
   }
 */
 module.exports = args => {
-  const {confidence, evidence, payments, rivalry, significance} = args;
-
   // Exit early when there are no spikes to judge
   if (!isArray(args.spikes)) {
     return {is_supported: false};
@@ -47,12 +45,12 @@ module.exports = args => {
   }
 
   // Exit early when too few round payments formed the peak
-  if (!(payments >= minPayments)) {
+  if (!(args.payments >= minPayments)) {
     return {is_supported: false};
   }
 
   // Exit early when the peak does not stand out beyond noise
-  if (!(significance >= minSignificance)) {
+  if (!(args.significance >= minSignificance)) {
     return {is_supported: false};
   }
 
@@ -62,20 +60,20 @@ module.exports = args => {
   }
 
   // Exit early when another position or currency fits nearly as well
-  if (!(rivalry < maxRivalry)) {
+  if (!(args.rivalry < maxRivalry)) {
     return {is_supported: false};
   }
 
   // Exit early when too little of the pattern was observable
-  if (!(evidence >= minEvidence)) {
+  if (!(args.evidence >= minEvidence)) {
     return {is_supported: false};
   }
 
   // Less observable evidence demands a larger margin over the aliases
-  const clear = minAliasMargin + clearMargin / evidence;
+  const clear = minAliasMargin + clearMargin / args.evidence;
 
   // Without a window around a known price only the prior excludes aliases
   const minConfidence = !!args.is_unconstrained ? clear : minAliasMargin;
 
-  return {is_supported: confidence >= minConfidence};
+  return {is_supported: args.confidence >= minConfidence};
 };

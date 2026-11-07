@@ -41,6 +41,29 @@ const makeRequest = ({coinbase, coingecko}) => (args, cbk) => {
   return cbk(coingecko[0], null, coingecko[1] || geckoFor(args.url));
 };
 
+// A third hour trading at 140 is the high end, leaving 110 in the middle
+const threeHours = [[dayStart + hour * 2, 139, 141, 140, 140, 1]].concat(
+  candles
+);
+
+// Hours of trading without any volume
+const quietHours = candles.map(candle => candle.slice(0, 5).concat([0]));
+
+// A request function that only expects to be asked for candles, once
+const makeCandlesOnlyRequest = () => {
+  const asked = [];
+
+  return (args, cbk) => {
+    asked.push(args.url);
+
+    if (asked.length > 1 || !isCandles(args.url)) {
+      throw new Error('UnexpectedRequestBeyondTheCandles');
+    }
+
+    return cbk('err');
+  };
+};
+
 const makeArgs = override => {
   const args = {
     date: recent,
@@ -105,6 +128,39 @@ const tests = [
       source: 'coingecko',
     },
   },
+  {
+    args: makeArgs({
+      request: makeRequest({coinbase: [null, threeHours], coingecko: [null]}),
+    }),
+    description: 'The median is the middle hour of an odd count of hours',
+    expected: {
+      cents: 11000,
+      close_cents: 14000,
+      hours: 3,
+      open_cents: 10000,
+      source: 'coinbase',
+      vwap_cents: 10829,
+    },
+  },
+  {
+    args: makeArgs({
+      request: makeRequest({coinbase: [null, quietHours], coingecko: [null]}),
+    }),
+    description: 'A day without volume has no volume weighted average',
+    expected: {
+      cents: 10500,
+      close_cents: 11000,
+      hours: 2,
+      open_cents: 10000,
+      source: 'coinbase',
+      vwap_cents: undefined,
+    },
+  },
+  {
+    args: makeArgs({date: '2017-12-17', request: makeCandlesOnlyRequest()}),
+    description: 'A day too old for CoinGecko has no stand in',
+    error: [503, 'UnexpectedErrorGettingCoinbaseCandles', {err: 'err'}],
+  },
 ];
 
 tests.forEach(({args, description, error, expected}) => {
@@ -117,55 +173,4 @@ tests.forEach(({args, description, error, expected}) => {
 
     return;
   });
-});
-
-test('The median is the middle hour of an odd count of hours', async () => {
-  // A third hour trading at 140 is the high end, leaving 110 in the middle
-  const three = [[dayStart + hour * 2, 139, 141, 140, 140, 1]].concat(candles);
-
-  const res = await method({
-    date: recent,
-    request: makeRequest({coinbase: [null, three], coingecko: [null]}),
-  });
-
-  deepEqual(res.cents, 11000, 'The middle hour is the reference');
-  deepEqual(res.close_cents, 14000, 'The close is the last hour close');
-
-  return;
-});
-
-test('A day without volume has no volume weighted average', async () => {
-  const quiet = candles.map(candle => candle.slice(0, 5).concat([0]));
-
-  const res = await method({
-    date: recent,
-    request: makeRequest({coinbase: [null, quiet], coingecko: [null]}),
-  });
-
-  deepEqual(res.cents, 10500, 'The median does not need volume');
-  deepEqual(res.vwap_cents, undefined, 'There is no volume to weigh by');
-
-  return;
-});
-
-test('A day too old for CoinGecko has no stand in', async () => {
-  const asked = [];
-
-  await rejects(
-    method({
-      date: '2017-12-17',
-      request: (args, cbk) => {
-        asked.push(args.url);
-
-        return cbk('err');
-      },
-    }),
-    [503, 'UnexpectedErrorGettingCoinbaseCandles', {err: 'err'}],
-    'The candles failure is passed back as is'
-  );
-
-  deepEqual(asked.length, 1, 'Only the candles were asked for');
-  deepEqual(isCandles(asked[0]), true, 'CoinGecko was not asked at all');
-
-  return;
 });

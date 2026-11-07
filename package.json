@@ -13,7 +13,7 @@
     "@alexbosworth/blockchain": "4.12.0",
     "async": "3.2.6",
     "asyncjs-util": "1.2.12",
-    "ln-service": "60.1.7"
+    "ln-service": "60.3.0"
   },
   "description": "Fiat rates library",
   "engines": {
@@ -46,8 +46,8 @@
     "check-prices": "node scripts/check_prices.js",
     "prepublishOnly": "node scripts/check_known_prices.js",
     "test": "node --experimental-test-coverage --test test/arrays/*.js test/chain/*.js test/coinbase/*.js test/coindesk/*.js test/coingecko/*.js test/dates/*.js test/rates/*.js test/storage/*.js",
-    "test-all": "node --experimental-test-coverage --test test/arrays/*.js test/chain/*.js test/coinbase/*.js test/coindesk/*.js test/coingecko/*.js test/dates/*.js test/rates/*.js test/slow/*.js test/storage/*.js",
+    "test-all": "node --experimental-test-coverage --test test/arrays/*.js test/chain/*.js test/coinbase/*.js test/coindesk/*.js test/coingecko/*.js test/dates/*.js test/rates/*.js test/slow/*.js test/storage/*.js && node scripts/check_known_prices.js",
     "update-known-prices": "node scripts/update_known_prices.js"
   },
-  "version": "3.0.0"
+  "version": "3.1.0"
 }

@@ -2,26 +2,43 @@ const {deepEqual} = require('node:assert').strict;
 const {rejects} = require('node:assert').strict;
 const test = require('node:test');
 
-const {blockHeaderHash} = require('./../../chain/blocks');
+const blockHeaderId = require('./../../chain/blocks/block_header_id');
 const {makeChain} = require('./../fixtures');
 const method = require('./../../chain/estimates/check_known_estimates');
 
 const bufferAsHex = buffer => buffer.toString('hex');
 const chain = makeChain({});
 
-// The hash of a block in the simulated chain
-const hashAt = height => {
+// The id of a block in the simulated chain, which answers right away
+const idAt = height => {
   const hash = Buffer.alloc(32);
+  const ids = [];
 
   hash.writeUInt32LE(height, 0);
 
-  return new Promise((resolve, reject) => {
-    return chain.lnd.blocks.getBlockHeader({block_hash: hash}, (err, res) => {
-      const header = bufferAsHex(res.raw_block_header);
+  chain.lnd.blocks.getBlockHeader({block_hash: hash}, (err, res) => {
+    const header = bufferAsHex(res.raw_block_header);
 
-      return resolve(blockHeaderHash({header}).hash);
-    });
+    return ids.push(blockHeaderId({header}).id);
   });
+
+  return ids[0];
+};
+
+// Estimates of days from blocks in, beyond, and replaced in the chain
+const beyond = {block_id: '00', blocks: [149, chain.tip + 1], cents: 1};
+const inChain = {block_id: idAt(436), blocks: [293, 436], cents: 1};
+const replaced = {block_id: '00', blocks: [0, 148], cents: 1};
+const replacedProvisional = {block_id: '00', blocks: [581, 600], cents: 1};
+const unchecked = {blocks: [437, 580], cents: 1};
+
+// Estimates from blocks beyond the tip, as when a node is behind
+const beyondRate = {block_id: '00', blocks: [437, chain.tip + 5], cents: 1};
+
+const beyondProvisional = {
+  block_id: '00',
+  blocks: [581, chain.tip + 9],
+  cents: 1,
 };
 
 const makeEstimates = overrides => {
@@ -61,7 +78,7 @@ const tests = [
   {
     args: makeArgs({
       estimates: makeEstimates({
-        rates: {'2024-01-01': {blocks: [0, 148], cents: 1, hash: '00'}},
+        rates: {'2024-01-01': {block_id: '00', blocks: [0, 148], cents: 1}},
       }),
       lnd: {
         blocks: {
@@ -70,94 +87,76 @@ const tests = [
         },
       },
     }),
-    description: 'Errors getting block hashes are passed back',
+    description: 'Errors getting block ids are passed back',
     error: [
       503,
       'UnexpectedErrorWhenGettingBlockHeader',
       {err: {details: 'err'}},
     ],
   },
+  {
+    args: makeArgs({
+      estimates: makeEstimates({
+        priors: {'2024-01-02': beyond, '2024-01-03': inChain},
+        provisional: {'2024-01-05': replacedProvisional},
+        rates: {'2024-01-01': replaced, '2024-01-04': unchecked},
+      }),
+    }),
+    description: 'Known estimates no longer in the chain are removed',
+    expected: {
+      estimates: {
+        priors: {'2024-01-03': inChain},
+        provisional: {},
+        rates: {'2024-01-04': unchecked},
+      },
+      removed: [
+        {block_id: '00', day: '2024-01-01'},
+        {block_id: '00', day: '2024-01-05'},
+      ],
+    },
+  },
+  {
+    args: makeArgs({
+      estimates: makeEstimates({
+        priors: {'2024-01-02': beyond},
+        provisional: {'2024-01-05': beyondProvisional},
+        rates: {'2024-01-03': inChain, '2024-01-04': beyondRate},
+      }),
+    }),
+    description: 'Estimates beyond the chain tip are set aside, not removed',
+    expected: {
+      estimates: {priors: {}, provisional: {}, rates: {'2024-01-03': inChain}},
+      removed: [],
+    },
+  },
+  {
+    args: makeArgs({
+      estimates: makeEstimates({rates: {'2024-01-01': replaced}}),
+      height: 148 + 1008,
+    }),
+    description: 'Estimates from long settled blocks are not checked',
+    expected: {
+      estimates: {priors: {}, rates: {'2024-01-01': replaced}},
+      removed: [],
+    },
+  },
 ];
 
-tests.forEach(({args, description, error}) => {
+// Check the known estimates, with what is known of them after
+const checkEstimates = async args => {
+  const {removed} = await method(args);
+
+  return {removed, estimates: args.estimates};
+};
+
+tests.forEach(({args, description, error, expected}) => {
   return test(description, async () => {
-    await rejects(method(args), error, 'Got expected error');
+    if (!!error) {
+      await rejects(method(args), error, 'Got expected error');
+    } else {
+      deepEqual(await checkEstimates(args), expected, 'Got expected check');
+    }
 
     return;
   });
-});
-
-test('Known estimates no longer in the chain are removed', async () => {
-  const estimates = makeEstimates({
-    priors: {
-      // A prior whose block is beyond the chain tip is only set aside
-      '2024-01-02': {blocks: [149, chain.tip + 1], cents: 1, hash: '00'},
-
-      // A prior that is still in the chain
-      '2024-01-03': {blocks: [293, 436], cents: 1, hash: await hashAt(436)},
-    },
-    provisional: {
-      // A provisional price whose block hash does not match the chain
-      '2024-01-05': {blocks: [581, 600], cents: 1, hash: '00'},
-    },
-    rates: {
-      // A rate whose block hash does not match the chain
-      '2024-01-01': {blocks: [0, 148], cents: 1, hash: '00'},
-
-      // A rate without a hash to check
-      '2024-01-04': {blocks: [437, 580], cents: 1},
-    },
-  });
-
-  const res = await method({estimates, height: chain.tip, lnd: chain.lnd});
-
-  const removed = [
-    {day: '2024-01-01', hash: '00'},
-    {day: '2024-01-05', hash: '00'},
-  ];
-
-  deepEqual(res, {removed}, 'Removed days');
-
-  deepEqual(Object.keys(estimates.priors), ['2024-01-03'], 'Prior set aside');
-  deepEqual(estimates.provisional, {}, 'Provisional removed');
-  deepEqual(Object.keys(estimates.rates), ['2024-01-04'], 'Rate removed');
-
-  return;
-});
-
-test('Estimates beyond the chain tip are set aside, not removed', async () => {
-  // A node that is behind the blocks that the estimates were derived from
-  const estimates = makeEstimates({
-    priors: {
-      '2024-01-02': {blocks: [149, chain.tip + 1], cents: 1, hash: '00'},
-    },
-    provisional: {
-      '2024-01-05': {blocks: [581, chain.tip + 9], cents: 1, hash: '00'},
-    },
-    rates: {
-      '2024-01-03': {blocks: [293, 436], cents: 1, hash: await hashAt(436)},
-      '2024-01-04': {blocks: [437, chain.tip + 5], cents: 1, hash: '00'},
-    },
-  });
-
-  const res = await method({estimates, height: chain.tip, lnd: chain.lnd});
-
-  deepEqual(res, {removed: []}, 'Nothing is reported for removal');
-  deepEqual(estimates.priors, {}, 'The prior is set aside');
-  deepEqual(estimates.provisional, {}, 'The provisional price is set aside');
-  deepEqual(Object.keys(estimates.rates), ['2024-01-03'], 'Rate set aside');
-
-  return;
-});
-
-test('Estimates from long settled blocks are not checked', async () => {
-  const estimates = makeEstimates({
-    rates: {'2024-01-01': {blocks: [0, 148], cents: 1, hash: '00'}},
-  });
-
-  const res = await method({estimates, height: 148 + 1008, lnd: chain.lnd});
-
-  deepEqual(res, {removed: []}, 'Nothing is removed');
-
-  return;
 });

@@ -21,6 +21,7 @@ const windowBlocksCount = 12;
 
   {
     blocks: <Retrieved Blocks By Height Map Object>
+    [fetched]: <Block Fetched Function> ({height}) => {}
     heights: [<Block Height Number>]
     [is_capping_near_round]: <Cap Values Just Off Round BTC Amounts Too Bool>
     lnd: <Authenticated LND API Object>
@@ -99,6 +100,7 @@ module.exports = (args, cbk) => {
           return getPriceFromBlocks({
             heights,
             blocks: args.blocks,
+            fetched: args.fetched,
             is_capping_near_round: args.is_capping_near_round,
             lnd: args.lnd,
             max_price: args.max_price,

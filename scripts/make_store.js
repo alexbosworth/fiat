@@ -44,9 +44,9 @@ module.exports = ({log, rates, requested}) => {
       }
 
       known[type][record.date] = {
+        block_id: record.block_id,
         blocks: record.blocks,
         cents: record.cents,
-        hash: record.hash,
         version: record.version,
       };
 

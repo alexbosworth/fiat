@@ -45,9 +45,9 @@ module.exports = ({chain, known}) => {
       const type = !!record.is_provisional ? 'provisional' : 'rates';
 
       prices[!!record.is_sample ? 'priors' : type][record.date] = {
+        block_id: record.block_id,
         blocks: record.blocks,
         cents: record.cents,
-        hash: record.hash,
         version: record.version,
       };
 

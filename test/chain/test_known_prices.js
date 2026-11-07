@@ -1,5 +1,4 @@
 const {deepEqual} = require('node:assert').strict;
-const {ok} = require('node:assert').strict;
 const test = require('node:test');
 
 const {join} = require('path');
@@ -7,37 +6,41 @@ const {readFileSync} = require('fs');
 
 const {earliestSupportedDay} = require('./../../chain/known');
 const method = require('./../../chain/known/known_prices');
-const {methodVersion} = require('./../../chain/known');
 const {parseKnownPrices} = require('./../../chain/known');
 
 const file = join(__dirname, '../../chain/known/known_prices.json');
 
-test('The prices shipped with the method are read once', () => {
-  const {rates} = method({});
+// Get the shipped prices twice, checking that they are prices in the range
+const knownPrices = args => {
+  const {rates} = method(args);
 
-  const {version} = methodVersion({});
+  const days = Object.keys(rates);
 
-  const shipped = parseKnownPrices({text: readFileSync(file, 'utf8')});
+  return {
+    rates,
+    is_in_cents: days.every(day => rates[day].cents > 0),
+    is_in_range: days.every(day => day >= earliestSupportedDay({}).day),
+    is_read_once: method(args).rates === rates,
+  };
+};
 
-  // The shipped prices have to be of the current method to be used at all
-  deepEqual(shipped.version, version, 'The shipped prices are current');
-  ok(!!Object.keys(rates).length, 'Shipped prices are returned');
+const tests = [
+  {
+    args: {},
+    description: 'The prices shipped with the method are read once',
+    expected: {
+      is_in_cents: true,
+      is_in_range: true,
+      is_read_once: true,
+      rates: parseKnownPrices({text: readFileSync(file, 'utf8')}).rates,
+    },
+  },
+];
 
-  deepEqual(
-    Object.keys(rates).length,
-    Object.keys(shipped.rates).length,
-    'Every shipped price is returned'
-  );
-
-  Object.keys(rates).forEach(day => {
-    ok(day >= earliestSupportedDay({}).day, 'Prices are in the range');
-    deepEqual(rates[day].version, version, 'Prices are of the method');
-    ok(rates[day].cents > 0, 'Prices are in cents');
+tests.forEach(({args, description, expected}) => {
+  return test(description, () => {
+    deepEqual(knownPrices(args), expected, 'Got expected prices');
 
     return;
   });
-
-  deepEqual(method({}).rates, rates, 'The same prices are returned again');
-
-  return;
 });

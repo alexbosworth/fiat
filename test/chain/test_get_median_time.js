@@ -9,7 +9,10 @@ const timeOffset = 68;
 
 // Block times are set by height, and can be overridden to be out of order
 const makeLnd = ({errors, short, times}) => {
+  const headers = [];
+
   return {
+    headers,
     blocks: {
       getBlockHash: (args, cbk) => {
         const hash = Buffer.alloc(32);
@@ -20,6 +23,8 @@ const makeLnd = ({errors, short, times}) => {
       },
       getBlockHeader: (args, cbk) => {
         const height = args.block_hash.readUInt32LE(0);
+
+        headers.push(height);
 
         if (!!errors) {
           return cbk({details: 'err'});
@@ -47,6 +52,23 @@ const makeArgs = overrides => {
   Object.keys(overrides).forEach(k => args[k] = overrides[k]);
 
   return args;
+};
+
+// Block times known for heights up to a height
+const timesUpTo = height => new Map([...Array(11).keys()].map(n => {
+  return [height - n, (height - n) * 600];
+}));
+
+// Get a median time, with the headers it took and the block times known after
+const medianTime = async args => {
+  const {time} = await method(args);
+
+  // Exit early when there are no known block times to add to
+  if (!args.times) {
+    return {time, headers: args.lnd.headers.length};
+  }
+
+  return {time, headers: args.lnd.headers.length, known: args.times.size};
 };
 
 const tests = [
@@ -77,17 +99,27 @@ const tests = [
   {
     args: makeArgs({}),
     description: 'The median time is the time of the sixth block back',
-    expected: {time: 95 * 600},
+    expected: {headers: 11, time: 95 * 600},
   },
   {
     args: makeArgs({lnd: makeLnd({times: {100: 1, 99: 2, 98: 3}})}),
     description: 'Out of order times do not move the median far',
-    expected: {time: 92 * 600},
+    expected: {headers: 11, time: 92 * 600},
   },
   {
     args: makeArgs({height: 3}),
     description: 'Near the start of the chain fewer blocks are used',
-    expected: {time: 2 * 600},
+    expected: {headers: 4, time: 2 * 600},
+  },
+  {
+    args: makeArgs({times: new Map()}),
+    description: 'Block times are kept as they are found',
+    expected: {headers: 11, known: 11, time: 95 * 600},
+  },
+  {
+    args: makeArgs({height: 101, times: timesUpTo(100)}),
+    description: 'Known block times are reused',
+    expected: {headers: 1, known: 12, time: 96 * 600},
   },
 ];
 
@@ -96,34 +128,9 @@ tests.forEach(({args, description, error, expected}) => {
     if (!!error) {
       await rejects(method(args), error, 'Got expected error');
     } else {
-      deepEqual(await method(args), expected, 'Got expected result');
+      deepEqual(await medianTime(args), expected, 'Got expected result');
     }
 
     return;
   });
-});
-
-test('Known block times are reused', async () => {
-  const times = new Map();
-
-  const lnd = makeLnd({});
-
-  const calls = [];
-
-  const {getBlockHeader} = lnd.blocks;
-
-  lnd.blocks.getBlockHeader = (args, cbk) => {
-    calls.push(args);
-
-    return getBlockHeader(args, cbk);
-  };
-
-  deepEqual(await method({lnd, times, height: 100}), {time: 95 * 600});
-  deepEqual(calls.length, 11, 'Eleven headers are retrieved');
-  deepEqual(times.size, 11, 'Eleven times are now known');
-
-  deepEqual(await method({lnd, times, height: 101}), {time: 96 * 600});
-  deepEqual(calls.length, 12, 'Only the new header is retrieved');
-
-  return;
 });

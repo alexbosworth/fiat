@@ -1,6 +1,5 @@
 const {deepEqual} = require('node:assert').strict;
 const {mock} = require('node:test');
-const {ok} = require('node:assert').strict;
 const test = require('node:test');
 
 const addDays = require('./../../chain/add_days');
@@ -8,17 +7,32 @@ const {makeRecentChain} = require('./../fixtures');
 const {makeReferenceRequest} = require('./../fixtures');
 const method = require('./../../scripts/check_prices');
 
+const {abs} = Math;
+
 // The pauses between reference requests pass at once
 mock.timers.enable({apis: ['setTimeout']});
 
-const makeArgs = overrides => {
-  const chain = makeRecentChain({});
+const chain = makeRecentChain({});
 
+// Comparisons are near their references
+const isNear = comparisons => comparisons.every(n => abs(n.difference) < 0.01);
+
+// Check prices, with the comparisons and the lines that were logged
+const checkPrices = async args => {
+  const lines = [];
+
+  const {comparisons} = await method(Object.assign({}, args, {
+    log: line => lines.push(line),
+  }));
+
+  return {comparisons, lines};
+};
+
+const makeArgs = overrides => {
   const args = {
     args: [],
     height: chain.tip,
     lnd: chain.lnd,
-    log: () => {},
     request: makeReferenceRequest({chain, timers: mock.timers}),
   };
 
@@ -27,50 +41,53 @@ const makeArgs = overrides => {
   return args;
 };
 
-test('The latest complete days are checked without dates', async () => {
-  const lines = [];
+const tests = [
+  {
+    args: makeArgs({args: ['--days', '2', '--unguided']}),
+    description: 'The latest complete days are checked without dates',
+    expected: {
+      has_summary: true,
+      has_table: true,
+      has_total: true,
+      is_near: true,
+      is_recent: true,
+      is_supported: true,
+    },
+    measure: ({comparisons, lines}) => {
+      const [latest, before] = comparisons.map(n => n.date);
 
-  const {comparisons} = await method(makeArgs({
-    args: ['--days', '2', '--unguided'],
-    log: line => lines.push(line),
-  }));
+      const summary = 'against the reference prices of 2 days';
 
-  const [latest, before] = comparisons.map(n => n.date);
+      return {
+        has_summary: lines.some(n => n.startsWith(summary)),
+        has_table: lines.some(n => n.startsWith('Date')),
+        has_total: lines.some(n => n.startsWith('Compared')),
+        is_near: isNear(comparisons),
+        is_recent: addDays({day: before, days: 1}).day === latest,
+        is_supported: comparisons.every(n => !!n.is_supported),
+      };
+    },
+  },
+  {
+    args: makeArgs({args: [chain.day_name(1)]}),
+    description: 'Dates that are given are derived and checked',
+    expected: {
+      dates: [chain.day_name(1)],
+      has_progress: true,
+      is_near: true,
+    },
+    measure: ({comparisons, lines}) => ({
+      dates: comparisons.map(n => n.date),
+      has_progress: lines.includes(`${chain.day_name(1)} deriving`),
+      is_near: isNear(comparisons),
+    }),
+  },
+];
 
-  deepEqual(addDays({day: before, days: 1}).day, latest, 'Days are recent');
+tests.forEach(({args, description, expected, measure}) => {
+  return test(description, async () => {
+    deepEqual(measure(await checkPrices(args)), expected, 'Got check');
 
-  ok(comparisons.every(n => !!n.is_supported), 'The prices are supported');
-
-  ok(comparisons.every(n => Math.abs(n.difference) < 0.01), 'Near reference');
-
-  ok(lines.some(n => n.startsWith('Date')), 'A table of the days is shown');
-
-  ok(lines.some(n => n.startsWith('Compared')), 'A summary is shown');
-
-  const summary = 'against the reference prices of 2 days';
-
-  ok(lines.some(n => n.startsWith(summary)), 'Differences are summarized');
-
-  return;
-});
-
-test('Dates that are given are derived and checked', async () => {
-  const chain = makeRecentChain({});
-  const lines = [];
-
-  const {comparisons} = await method({
-    args: [chain.day_name(1)],
-    height: chain.tip,
-    lnd: chain.lnd,
-    log: line => lines.push(line),
-    request: makeReferenceRequest({chain, timers: mock.timers}),
+    return;
   });
-
-  deepEqual(comparisons.map(n => n.date), [chain.day_name(1)], 'Date checked');
-
-  ok(Math.abs(comparisons[0].difference) < 0.01, 'The price is near');
-
-  ok(lines.includes(`${chain.day_name(1)} deriving`), 'Progress is shown');
-
-  return;
 });

@@ -2,7 +2,7 @@ const {deepEqual} = require('node:assert').strict;
 const {rejects} = require('node:assert').strict;
 const test = require('node:test');
 
-const method = require('./../../chain/blocks/get_block_hash');
+const method = require('./../../chain/blocks/get_block_id');
 
 const hexAsBuffer = hex => Buffer.from(hex, 'hex');
 
@@ -13,7 +13,7 @@ const genesisHeader = [
   '4b1e5e4a29ab5f49ffff001d1dac2b7c',
 ].join('');
 
-const genesisHash = [
+const genesisId = [
   '000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f',
 ].join('');
 
@@ -40,12 +40,12 @@ const tests = [
   {
     args: makeArgs({height: undefined}),
     description: 'A block height is required',
-    error: [400, 'ExpectedBlockHeightToGetBlockHash'],
+    error: [400, 'ExpectedBlockHeightToGetBlockId'],
   },
   {
     args: makeArgs({lnd: undefined}),
     description: 'LND is required',
-    error: [400, 'ExpectedAuthenticatedLndToGetBlockHash'],
+    error: [400, 'ExpectedAuthenticatedLndToGetBlockId'],
   },
   {
     args: makeArgs({
@@ -66,12 +66,14 @@ const tests = [
   {
     args: makeArgs({lnd: makeLnd({header: '00'})}),
     description: 'A full block header is expected',
-    error: [503, 'ExpectedBlockHeaderToGetBlockHash'],
+    error: [503, 'ExpectedBlockHeaderToGetBlockId', {
+      err: new Error('ExpectedRawBlockHeaderHexStringToGetBlockId'),
+    }],
   },
   {
     args: makeArgs({}),
-    description: 'The block hash is derived from the header',
-    expected: {hash: genesisHash},
+    description: 'The block id is derived from the header',
+    expected: {id: genesisId},
   },
 ];
 

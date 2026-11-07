@@ -1,12 +1,34 @@
 const {deepEqual} = require('node:assert').strict;
-const {ok} = require('node:assert').strict;
 const test = require('node:test');
 
 const {makeChain} = require('./../fixtures');
 const method = require('./../../chain/estimates/estimate_day_price');
 
+const {abs} = Math;
 const centsPerDollar = 100;
 const chain = makeChain({});
+
+// The price jumps by eight percent at 11:00 every day
+const hourlyMoves = [...Array(24).keys()].map(hour => hour < 11 ? 0 : 0.08);
+
+// Chains with a jump in price, one for an estimate and one for a sample
+const makeJumpyChain = () => makeChain({
+  hourly_moves: hourlyMoves,
+  prices: Array(5).fill(60000),
+});
+
+const jumpy = makeJumpyChain();
+const jumpySample = makeJumpyChain();
+
+const truth = chain.prices[chain.day_name(1)] * centsPerDollar;
+
+// The day spent more of its time after the jump than before it
+const isTimeMedian = cents => abs(cents / 6480000 - 1) < 0.005;
+
+// Most of the windows of a day support its price
+const isWindowsSupported = windows => {
+  return windows.filter(n => !!n.is_supported).length >= 10;
+};
 
 const makeArgs = overrides => {
   const args = {date: chain.day_name(1), height: chain.tip, lnd: chain.lnd};
@@ -16,69 +38,102 @@ const makeArgs = overrides => {
   return args;
 };
 
-test('The price of a day is estimated from all of its blocks', async () => {
-  const res = await method(makeArgs({}));
-
-  const truth = chain.prices[chain.day_name(1)] * centsPerDollar;
-
-  deepEqual(res.blocks, [149, 292], 'Block range is returned');
-  ok(Math.abs(res.cents / truth - 1) < 0.01, 'Price is close to truth');
-  ok(res.confidence > 0, 'Confidence is returned');
-  ok(res.outputs > 0, 'Outputs count is returned');
-  ok(res.payments > 0, 'Payments count is returned');
-  ok(res.spikes.length > 0, 'Spike strengths are returned');
-  deepEqual(res.hash.length, 64, 'Last block hash is returned');
-  deepEqual(res.is_supported, true, 'Estimate is supported');
-  deepEqual(res.is_widened, undefined, 'Search was not widened');
-  deepEqual(res.sample_blocks, undefined, 'The day is not a sample');
-
-  return;
+// Arguments to estimate the price of a day of a chain with a jump in price
+const makeJumpyArgs = args => ({
+  date: args.jumped.day_name(2),
+  height: args.jumped.tip,
+  is_sample: args.is_sample,
+  lnd: args.jumped.lnd,
+  max_price: 72000,
+  min_price: 37200,
 });
 
-test('A day the price jumped in is priced from its windows', async () => {
-  // The price jumps by eight percent at 11:00 every day
-  const hourlyMoves = [...Array(24).keys()].map(hour => hour < 11 ? 0 : 0.08);
+const tests = [
+  {
+    args: makeArgs({}),
+    description: 'The price of a day is estimated from all of its blocks',
+    expected: {
+      blocks: [149, 292],
+      has_confidence: true,
+      has_outputs: true,
+      has_payments: true,
+      has_spikes: true,
+      id_length: 64,
+      is_close: true,
+      is_supported: true,
+      is_widened: undefined,
+      sample_blocks: undefined,
+    },
+    measure: res => ({
+      blocks: res.blocks,
+      has_confidence: res.confidence > 0,
+      has_outputs: res.outputs > 0,
+      has_payments: res.payments > 0,
+      has_spikes: res.spikes.length > 0,
+      id_length: res.block_id.length,
+      is_close: abs(res.cents / truth - 1) < 0.01,
+      is_supported: res.is_supported,
+      is_widened: res.is_widened,
+      sample_blocks: res.sample_blocks,
+    }),
+  },
+  {
+    args: makeJumpyArgs({is_sample: false, jumped: jumpy}),
+    description: 'A day the price jumped in is priced from its windows',
+    expected: {
+      fetched: 144,
+      is_supported: true,
+      is_time_median: true,
+      is_windows_supported: true,
+      windows: 12,
+    },
+    measure: res => ({
+      fetched: jumpy.calls.blocks,
+      is_supported: res.is_supported,
+      is_time_median: isTimeMedian(res.cents),
+      is_windows_supported: isWindowsSupported(res.windows),
+      windows: res.windows.length,
+    }),
+  },
+  {
+    args: makeJumpyArgs({is_sample: true, jumped: jumpySample}),
+    description: 'A sample of a jumpy day is priced from its windows',
+    expected: {
+      fetched: 144,
+      is_supported: true,
+      is_time_median: true,
+      is_windows_supported: true,
+      windows: 12,
+    },
+    measure: res => ({
+      fetched: jumpySample.calls.blocks,
+      is_supported: res.is_supported,
+      is_time_median: isTimeMedian(res.cents),
+      is_windows_supported: isWindowsSupported(res.windows),
+      windows: res.windows.length,
+    }),
+  },
+  {
+    args: makeArgs({}),
+    description: 'A full day with a steady price is priced from its windows',
+    expected: {is_close: true, is_windowed: true},
+    measure: res => ({
+      is_close: abs(res.cents / truth - 1) < 0.01,
+      is_windowed: res.windows.length > 10,
+    }),
+  },
+  {
+    args: makeArgs({is_sample: true}),
+    description: 'A supported sample only bridges, so it is not windowed',
+    expected: {windows: undefined},
+    measure: res => ({windows: res.windows}),
+  },
+];
 
-  const jumpy = makeChain({
-    hourly_moves: hourlyMoves,
-    prices: Array(5).fill(60000),
+tests.forEach(({args, description, expected, measure}) => {
+  return test(description, async () => {
+    deepEqual(measure(await method(args)), expected, 'Got expected estimate');
+
+    return;
   });
-
-  const args = {
-    date: jumpy.day_name(2),
-    height: jumpy.tip,
-    lnd: jumpy.lnd,
-    max_price: 72000,
-    min_price: 37200,
-  };
-
-  for (const isSample of [false, true]) {
-    const fetched = jumpy.calls.blocks;
-
-    const res = await method(Object.assign({is_sample: isSample}, args));
-
-    const supported = res.windows.filter(n => !!n.is_supported);
-
-    // The day spent more of its time after the jump than before it
-    ok(Math.abs(res.cents / 6480000 - 1) < 0.005, 'Price is the time median');
-    deepEqual(res.is_supported, true, 'The windows support the price');
-    deepEqual(res.windows.length, 12, 'The day is split into windows');
-    ok(supported.length >= 10, 'The windows are supported');
-    deepEqual(jumpy.calls.blocks - fetched, 144, 'Blocks are fetched once');
-  }
-
-  // A full day with a steady price is priced from its windows too
-  const steady = await method(makeArgs({}));
-
-  const truth = chain.prices[chain.day_name(1)] * centsPerDollar;
-
-  ok(Math.abs(steady.cents / truth - 1) < 0.01, 'The steady price is found');
-  ok(steady.windows.length > 10, 'A full day is split into windows');
-
-  // A supported sample only bridges, so it is not split into windows
-  const sample = await method(makeArgs({is_sample: true}));
-
-  deepEqual(sample.windows, undefined, 'A supported sample is not split');
-
-  return;
 });

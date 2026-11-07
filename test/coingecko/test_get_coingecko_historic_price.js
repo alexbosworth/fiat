@@ -1,10 +1,55 @@
 const {deepEqual} = require('node:assert').strict;
+const {mock} = require('node:test');
 const {rejects} = require('node:assert').strict;
 const test = require('node:test');
 
 const method = require('./../../scripts/compare/get_coingecko_historic_price');
+const {name} = require('./../../package');
+const {version} = require('./../../package');
 
+const agent = `${name}/${version} (+https://github.com/alexbosworth/fiat)`;
+const api = 'https://api.coingecko.com/api/v3/coins/bitcoin/history';
 const body = {market_data: {current_price: {usd: 42345.678}}};
+
+// The waits before trying again pass at once
+mock.timers.enable({apis: ['setTimeout']});
+
+// A request answered by responses in turn, the first rate limited
+const makeRateLimitedRequest = () => {
+  const responses = [
+    [null, {statusCode: 429}, {status: {error_code: 429}}],
+    [null, {statusCode: 200}, body],
+  ];
+
+  return (args, cbk) => {
+    const [err, res, json] = responses.shift();
+
+    // Exit early when there is no wait before trying again
+    if (res.statusCode !== 429) {
+      return cbk(err, res, json);
+    }
+
+    cbk(err, res, json);
+
+    // The wait before trying again passes at once
+    return mock.timers.runAll();
+  };
+};
+
+// Get a price, with the agents and the urls of the requests for it
+const priceOf = async args => {
+  const requests = [];
+
+  const res = await method(Object.assign({}, args, {
+    request: (req, cbk) => {
+      requests.push({agent: req.headers['user-agent'], url: req.url});
+
+      return args.request(req, cbk);
+    },
+  }));
+
+  return {requests, cents: res.cents};
+};
 
 const makeRequest = (err, res) => (args, cbk) => cbk(err, null, res);
 
@@ -68,8 +113,42 @@ const tests = [
   },
   {
     args: makeArgs({}),
-    description: 'The price at the start of the day is returned',
-    expected: {cents: 4234568},
+    description: 'The price at the start of the day is asked for in d-m-y',
+    expected: {
+      cents: 4234568,
+      requests: [{agent, url: `${api}?date=02-01-2024&localization=false`}],
+    },
+  },
+  {
+    args: makeArgs({request: makeRateLimitedRequest()}),
+    description: 'A rate limited request is retried',
+    expected: {
+      cents: 4234568,
+      requests: [
+        {agent, url: `${api}?date=02-01-2024&localization=false`},
+        {agent, url: `${api}?date=02-01-2024&localization=false`},
+      ],
+    },
+  },
+  {
+    args: makeArgs({
+      request: (args, cbk) => cbk(null, {statusCode: 401}, {
+        status: {error_code: 10012, error_message: 'Too far back'},
+      }),
+    }),
+    description: 'A refusal from CoinGecko is passed back with its message',
+    error: [503, 'CoingeckoRefusedHistoricPriceRequest', {
+      err: 'Too far back',
+    }],
+  },
+  {
+    args: makeArgs({
+      request: (args, cbk) => cbk(null, null, {error: 'coin not found'}),
+    }),
+    description: 'A plain error from CoinGecko is passed back',
+    error: [503, 'CoingeckoRefusedHistoricPriceRequest', {
+      err: 'coin not found',
+    }],
   },
 ];
 
@@ -78,93 +157,9 @@ tests.forEach(({args, description, error, expected}) => {
     if (!!error) {
       await rejects(method(args), error, 'Got expected error');
     } else {
-      deepEqual(await method(args), expected, 'Got expected result');
+      deepEqual(await priceOf(args), expected, 'Got expected result');
     }
 
     return;
   });
-});
-
-test('The date is passed in CoinGecko day month year order', async () => {
-  const urls = [];
-
-  await method({
-    date: '2024-01-02',
-    request: (args, cbk) => {
-      urls.push(args.url);
-
-      return cbk(null, null, body);
-    },
-  });
-
-  deepEqual(urls[0].includes('date=02-01-2024'), true, 'Date is reversed');
-
-  return;
-});
-
-test('A rate limited request is retried', async ({mock}) => {
-  mock.timers.enable({apis: ['setTimeout']});
-
-  const responses = [
-    [null, {statusCode: 429}, {status: {error_code: 429}}],
-    [null, {statusCode: 200}, body],
-  ];
-
-  const res = await method({
-    date: '2024-01-02',
-    request: (args, cbk) => {
-      cbk(...responses.shift());
-
-      // The wait before trying again passes at once
-      return mock.timers.runAll();
-    },
-  });
-
-  deepEqual(res, {cents: 4234568}, 'The retried request succeeds');
-  deepEqual(responses.length, 0, 'Both responses were used');
-
-  return;
-});
-
-test('A refusal from CoinGecko is passed back with its message', async () => {
-  await rejects(
-    method({
-      date: '2024-01-02',
-      request: (args, cbk) => cbk(null, {statusCode: 401}, {
-        status: {error_code: 10012, error_message: 'Too far back'},
-      }),
-    }),
-    [503, 'CoingeckoRefusedHistoricPriceRequest', {err: 'Too far back'}],
-    'The refusal is explained'
-  );
-
-  await rejects(
-    method({
-      date: '2024-01-02',
-      request: (args, cbk) => cbk(null, null, {error: 'coin not found'}),
-    }),
-    [503, 'CoingeckoRefusedHistoricPriceRequest', {err: 'coin not found'}],
-    'A plain error is explained'
-  );
-
-  return;
-});
-
-test('A descriptive user agent is sent', async () => {
-  const requests = [];
-
-  await method({
-    date: '2024-01-02',
-    request: (args, cbk) => {
-      requests.push(args);
-
-      return cbk(null, null, body);
-    },
-  });
-
-  const [{headers}] = requests;
-
-  deepEqual(/fiat\/\d/.test(headers['user-agent']), true, 'Agent is named');
-
-  return;
 });

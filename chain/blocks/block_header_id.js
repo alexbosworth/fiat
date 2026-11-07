@@ -5,7 +5,7 @@ const hexAsBuffer = hex => Buffer.from(hex, 'hex');
 const isHeaderHex = n => /^[0-9A-F]{160}$/i.test(n);
 const sha256 = buffer => createHash('sha256').update(buffer).digest();
 
-/** Get the hash of a block from its header
+/** Get the id of a block from its header
 
   {
     header: <Raw Block Header Hex String>
@@ -16,14 +16,14 @@ const sha256 = buffer => createHash('sha256').update(buffer).digest();
 
   @returns
   {
-    hash: <Block Hash Hex String>
+    id: <Block Id Hex String>
   }
 */
 module.exports = ({header}) => {
   if (!isHeaderHex(header)) {
-    throw new Error('ExpectedRawBlockHeaderHexStringToGetBlockHeaderHash');
+    throw new Error('ExpectedRawBlockHeaderHexStringToGetBlockId');
   }
 
   // Block ids are the double SHA256 of the header, shown byte-reversed
-  return {hash: bufferAsHex(sha256(sha256(hexAsBuffer(header))).reverse())};
+  return {id: bufferAsHex(sha256(sha256(hexAsBuffer(header))).reverse())};
 };

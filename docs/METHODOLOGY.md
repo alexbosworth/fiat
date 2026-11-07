@@ -593,20 +593,20 @@ Full day prices are kept as rates, bridging estimates as priors and the
 provisional prices of the latest days apart from both in a JSON file. The file
 carries a version of its own format, so that a reader can tell a file written
 in another layout from one it understands. Each record carries the price, the
-block range it was derived from, the hash of the last block in that range, and
+block range it was derived from, the id of the last block in that range, and
 a version made of the method version and a hash of the template, which is
 separate from the file format version. Rates also carry the output and payment
 counts and the main health measures, which show how well a price was supported
 without its blocks, though not every input of the support rule, and they mark a
 price that was estimated without a guide. Checking a price fully means deriving
-it again from its block range, which the hash and the version make
+it again from its block range, which the block id and the version make
 reproducible.
 
 Records whose method version does not match the running method are ignored, so
 a change to the method or the template causes prices to be derived again rather
 than mixing prices from different methods, without discarding the file. Records
 whose last block is within about a week of the chain tip are checked against
-the chain before use. A record whose block hash no longer
+the chain before use. A record whose block id no longer
 matches, because the chain was reorganized or the file came from another chain,
 is removed from the file for good, as long as the file still holds that same
 record rather than a newer price for the day, and the day is derived again when

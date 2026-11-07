@@ -23,18 +23,16 @@ const {round} = Math;
   }
 */
 module.exports = args => {
-  const {amounts, outputs, price, reach, weights} = args;
-
   const binsPerDecade = args.bins_per_decade;
-  const counts = Array(reach * 2 + 1).fill(Number());
-  const maxRatio = pow(10, (reach + half) / args.bins_per_decade);
-  const weighted = Array(reach * 2 + 1).fill(Number());
+  const counts = Array(args.reach * 2 + 1).fill(Number());
+  const maxRatio = pow(10, (args.reach + half) / args.bins_per_decade);
+  const weighted = Array(args.reach * 2 + 1).fill(Number());
 
   // Round amounts are further apart than the reach, so an output fits one
-  outputs.forEach(tokens => {
-    const paid = price * tokens / tokensPerBigUnit;
+  args.outputs.forEach(tokens => {
+    const paid = args.price * tokens / tokensPerBigUnit;
 
-    return amounts.forEach((usd, index) => {
+    return args.amounts.forEach((usd, index) => {
       const ratio = usd / paid;
 
       // Exit early when the output is not near this round amount
@@ -42,10 +40,10 @@ module.exports = args => {
         return;
       }
 
-      const bin = reach + round(log10(ratio) * binsPerDecade);
+      const bin = args.reach + round(log10(ratio) * binsPerDecade);
 
       counts[bin]++;
-      weighted[bin] += weights[index];
+      weighted[bin] += args.weights[index];
     });
   });
 

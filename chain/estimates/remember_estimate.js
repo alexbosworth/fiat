@@ -5,6 +5,7 @@ const rounded = n => Math.round(n * 1e3) / 1e3;
   {
     estimate: {
       [agreement]: <Spike Strengths Agreement With Template Weights Number>
+      [block_id]: <Last Block Id Hex String>
       [blocks]: [<First Block Height Number>, <Last Block Height Number>]
       cents: <USD Cents Per BTC Number>
       [confidence]: <Best Position Score Over Best Alias Score Number>
@@ -12,7 +13,6 @@ const rounded = n => Math.round(n * 1e3) / 1e3;
       [dispersion]: <Peak Width Beyond Smoothing As Price Fraction Number>
       [drift]: <Second Half Price Change From First Half Price Number>
       [evidence]: <Share of Prior Weight Observable At the Price Number>
-      [hash]: <Last Block Hash Hex String>
       [is_provisional]: <Price Is For An Incomplete Day Bool>
       [is_sample]: <Price Is A Rough Estimate From Sample Blocks Bool>
       [is_unguided]: <Price Was Estimated Without a Neighboring Guide Bool>
@@ -41,18 +41,20 @@ const rounded = n => Math.round(n * 1e3) / 1e3;
   }
 */
 module.exports = ({estimate, estimates}) => {
-  const {blocks, cents, date, hash, version} = estimate;
+  const {blocks, cents, date, version} = estimate;
+
+  const brief = {blocks, cents, version, block_id: estimate.block_id};
 
   // Exit early when the estimate is provisional
   if (!!estimate.is_provisional) {
-    estimates.provisional[date] = {blocks, cents, hash, version};
+    estimates.provisional[date] = brief;
 
     return {estimates};
   }
 
   // Exit early when the estimate is only a rough guide
   if (!!estimate.is_sample) {
-    estimates.priors[date] = {blocks, cents, hash, version};
+    estimates.priors[date] = brief;
 
     return {estimates};
   }
@@ -60,9 +62,9 @@ module.exports = ({estimate, estimates}) => {
   estimates.rates[date] = {
     blocks,
     cents,
-    hash,
     version,
     agreement: rounded(estimate.agreement),
+    block_id: estimate.block_id,
     confidence: rounded(estimate.confidence),
     dispersion: rounded(estimate.dispersion),
     drift: estimate.drift === undefined ? undefined : rounded(estimate.drift),

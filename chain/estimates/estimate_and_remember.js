@@ -3,7 +3,7 @@ const {returnResult} = require('asyncjs-util');
 
 const estimateDayPrice = require('./estimate_day_price');
 const estimateRecord = require('./estimate_record');
-const {getBlockHash} = require('./../blocks');
+const {getBlockId} = require('./../blocks');
 const isAliasRatio = require('./is_alias_ratio');
 const nearestEstimate = require('./nearest_estimate');
 const priceWindow = require('./price_window');
@@ -21,6 +21,7 @@ const estimateKey = ({cents, day}) => [day, cents].join(' ');
       provisional: {<Day YYYY-MM-DD String>: <Estimate Object>}
       rates: {<Day YYYY-MM-DD String>: <Estimate Object>}
     }
+    [fetched]: <Block Fetched Function> ({height}) => {}
     height: <Current Best Chain Height Number>
     [is_sample]: <Estimate From a Sample of Blocks Bool>
     [is_unguided]: <Estimate Without a Neighboring Guide Bool>
@@ -70,8 +71,8 @@ module.exports = (args, cbk) => {
         return cbk(null, args.unsupported.get(key));
       }],
 
-      // Get the hash of the last block of the estimate found unsupported
-      getHash: ['getUnsupported', ({getUnsupported}, cbk) => {
+      // Get the id of the last block of the estimate found unsupported
+      getId: ['getUnsupported', ({getUnsupported}, cbk) => {
         // Exit early when the day was not found unsupported before
         if (!getUnsupported) {
           return cbk();
@@ -84,15 +85,15 @@ module.exports = (args, cbk) => {
           return cbk();
         }
 
-        return getBlockHash({height: last, lnd: args.lnd}, cbk);
+        return getBlockId({height: last, lnd: args.lnd}, cbk);
       }],
 
       // An estimate found unsupported holds while its blocks are in the chain
       cached: [
-        'getHash',
+        'getId',
         'getUnsupported',
         'key',
-        ({getHash, getUnsupported, key}, cbk) =>
+        ({getId, getUnsupported, key}, cbk) =>
       {
         // Exit early when the day was not found unsupported before
         if (!getUnsupported) {
@@ -100,7 +101,7 @@ module.exports = (args, cbk) => {
         }
 
         // Exit early when the blocks are gone, so the day is estimated again
-        if (!getHash || getHash.hash !== getUnsupported.hash) {
+        if (!getId || getId.id !== getUnsupported.block_id) {
           args.unsupported.delete(key);
 
           return cbk();
@@ -123,6 +124,7 @@ module.exports = (args, cbk) => {
         return estimateDayPrice({
           blocks: args.blocks,
           date: args.day,
+          fetched: args.fetched,
           height: args.height,
           is_sample: args.is_sample || undefined,
           lnd: args.lnd,

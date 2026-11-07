@@ -48,6 +48,13 @@ const tests = [
     args: makeArgs({
       fs: makeFs(JSON.stringify({rates: {[day]: {cents: 1}}, version: 1})),
     }),
+    description: 'Prices in an earlier format are not read, to derive again',
+    expected: {priors: {}, provisional: {}, rates: {}},
+  },
+  {
+    args: makeArgs({
+      fs: makeFs(JSON.stringify({rates: {[day]: {cents: 1}}, version: 2})),
+    }),
     description: 'A file in the current format is read',
     expected: {priors: {}, provisional: {}, rates: {[day]: {cents: 1}}},
   },

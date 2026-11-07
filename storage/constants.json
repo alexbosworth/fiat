@@ -1,4 +1,5 @@
 {
-  "fileVersion": 1,
+  "blocksFileVersion": 1,
+  "fileVersion": 2,
   "fsMethods": ["getFile", "makeDirectory", "renameFile", "writeFile"]
 }

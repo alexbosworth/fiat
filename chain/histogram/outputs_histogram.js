@@ -28,13 +28,11 @@ const {round} = Math;
   }
 */
 module.exports = args => {
-  const {outputs} = args;
-
   const binFor = tokens => round(log10(tokens) * binsPerDecade);
   const counts = Array(round(log10(maxTokens) * binsPerDecade) + 1).fill(0);
   const rounded = new Map();
 
-  const included = outputs.filter(n => n >= minTokens && n <= maxTokens);
+  const included = args.outputs.filter(n => n >= minTokens && n <= maxTokens);
 
   const plain = included.filter(tokens => {
     // Exit early when the value is not round or round values count in full

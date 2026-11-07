@@ -1,7 +1,6 @@
 const EventEmitter = require('events');
 const https = require('https');
 const {deepEqual} = require('node:assert').strict;
-const {rejects} = require('node:assert').strict;
 const test = require('node:test');
 
 const method = require('./../../scripts/https_request');
@@ -27,79 +26,91 @@ const answer = script => (url, options, onResponse) => {
   return req;
 };
 
-const request = () => new Promise((resolve, reject) => {
-  return method({url: 'https://example.com/'}, (err, res, body) => {
-    return !!err ? reject(err) : resolve({body, res});
-  });
-});
-
-test('A response is passed back with its body', async () => {
-  try {
-    https.get = answer(({res}) => {
-      res.emit('data', Buffer.from('{"a":'));
-      res.emit('data', Buffer.from('1}'));
-
-      res.complete = true;
-
-      res.emit('end');
-      res.emit('close');
-    });
-
-    deepEqual(await request(), {body: {a: 1}, res: {statusCode: 200}});
-
-    https.get = answer(({res}) => {
-      res.emit('data', Buffer.from('not json'));
-
-      res.complete = true;
-
-      res.emit('end');
-    });
-
-    deepEqual(await request(), {body: undefined, res: {statusCode: 200}});
-  } finally {
-    https.get = get;
-  }
-
-  return;
-});
-
-test('A response cut off before its end is an error', async () => {
+// Make a request answered by a script, with every call back of the request
+const requestWith = ({script}) => new Promise(resolve => {
   const calls = [];
 
-  try {
-    https.get = answer(({res}) => {
-      res.emit('data', Buffer.from('{"a":'));
-      res.emit('error', new Error('aborted'));
-      res.emit('close');
-    });
+  https.get = answer(script);
 
-    await rejects(request(), new Error('aborted'), 'The error is passed back');
+  method({url: 'https://example.com/'}, (...args) => calls.push(args));
 
-    https.get = answer(({res}) => {
-      res.emit('data', Buffer.from('{"a":'));
-      res.emit('close');
-    });
-
-    await rejects(
-      request(),
-      new Error('ResponseClosedBeforeItsEnd'),
-      'A response that closes without an error is cut off too'
-    );
-
-    https.get = answer(({req, res}) => {
-      res.emit('error', new Error('first'));
-      req.emit('error', new Error('second'));
-      res.emit('close');
-    });
-
-    method({url: 'https://example.com/'}, err => calls.push(err.message));
-
-    await new Promise(resolve => setImmediate(() => setImmediate(resolve)));
-
-    deepEqual(calls, ['first'], 'The callback is called once');
-  } finally {
+  // Calls back come after the response, and are waited for a little longer
+  return setImmediate(() => setImmediate(() => {
     https.get = get;
-  }
 
-  return;
+    return resolve({calls});
+  }));
+});
+
+const tests = [
+  {
+    args: {
+      script: ({res}) => {
+        res.emit('data', Buffer.from('{"a":'));
+        res.emit('data', Buffer.from('1}'));
+
+        res.complete = true;
+
+        res.emit('end');
+        res.emit('close');
+      },
+    },
+    description: 'A response is passed back with its body',
+    expected: {calls: [[null, {statusCode: 200}, {a: 1}]]},
+  },
+  {
+    args: {
+      script: ({res}) => {
+        res.emit('data', Buffer.from('not json'));
+
+        res.complete = true;
+
+        res.emit('end');
+      },
+    },
+    description: 'A response that is not JSON is passed back without a body',
+    expected: {calls: [[null, {statusCode: 200}, undefined]]},
+  },
+  {
+    args: {
+      script: ({res}) => {
+        res.emit('data', Buffer.from('{"a":'));
+        res.emit('error', new Error('aborted'));
+        res.emit('close');
+      },
+    },
+    description: 'A response cut off by an error passes back the error',
+    expected: {calls: [[new Error('aborted'), undefined, undefined]]},
+  },
+  {
+    args: {
+      script: ({res}) => {
+        res.emit('data', Buffer.from('{"a":'));
+        res.emit('close');
+      },
+    },
+    description: 'A response that closes without an error is cut off too',
+    expected: {
+      calls: [[new Error('ResponseClosedBeforeItsEnd'), undefined, undefined]],
+    },
+  },
+  {
+    args: {
+      script: ({req, res}) => {
+        res.emit('error', new Error('first'));
+        req.emit('error', new Error('second'));
+        res.emit('close');
+      },
+    },
+    description: 'The callback is only called for the first outcome',
+    expected: {calls: [[new Error('first'), undefined, undefined]]},
+  },
+];
+
+tests.forEach(({args, description, expected}) => {
+  return test(description, async () => {
+    deepEqual(await requestWith(args), expected, 'Got expected calls');
+
+    return;
+  });
 });

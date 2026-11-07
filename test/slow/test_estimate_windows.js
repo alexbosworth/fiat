@@ -1,10 +1,10 @@
 const {deepEqual} = require('node:assert').strict;
-const {ok} = require('node:assert').strict;
+const {isDeepStrictEqual} = require('util');
 const test = require('node:test');
 
+const estimateWindows = require('./../../chain/estimates/estimate_windows');
 const {getBlocksForDate} = require('./../../chain/blocks');
 const {makeChain} = require('./../fixtures');
-const method = require('./../../chain/estimates/estimate_windows');
 
 const after = 64800;
 const before = 60000;
@@ -22,148 +22,163 @@ const chain = makeChain({
 
 const isNear = (cents, price) => Math.abs(cents / centsPerDollar / price - 1);
 
-test('A day the price jumped in is priced from its windows', async () => {
+const secondsIn = windows => windows.reduce((sum, n) => sum + n.seconds, 0);
+
+// Estimate the windows of a day of the chain with LND for a chain
+const estimateDay = async args => {
   const {heights} = await getBlocksForDate({
-    date: chain.day_name(2),
+    date: chain.day_name(args.day),
     height: chain.tip,
     lnd: chain.lnd,
   });
 
-  const blocks = new Map();
-
-  const res = await method({
-    blocks,
+  return estimateWindows({
     heights,
-    lnd: chain.lnd,
-    max_price: 72000,
-    min_price: 37200,
+    blocks: args.blocks || new Map(),
+    lnd: args.lnd || chain.lnd,
+    max_price: args.max_price,
+    min_price: args.min_price,
     times: new Map(),
   });
+};
 
-  const supported = res.windows.filter(n => n.is_supported);
+const tests = [
+  {
+    args: {day: 2, max_price: 72000, min_price: 37200},
+    description: 'A day the price jumped in is priced from its windows',
+    expected: {
+      is_each_near: true,
+      is_mostly_supported: true,
+      is_outputs_counted: true,
+      is_payments_counted: true,
+      is_significant: true,
+      is_supported: true,
+      is_time_median: true,
+      seconds: secondsPerDay,
+      windows: 12,
+    },
+    method: async args => {
+      const res = await estimateDay(args);
 
-  const covered = res.windows.reduce((sum, n) => sum + n.seconds, 0);
+      const supported = res.windows.filter(n => n.is_supported);
 
-  deepEqual(res.windows.length, 12, 'The day is split into windows');
-  deepEqual(covered, secondsPerDay, 'The windows cover the whole day');
-  ok(supported.length >= 10, 'Most windows are supported');
+      // A window is priced before or after the jump
+      const isEachNear = supported.every(({cents}) => {
+        return Math.min(isNear(cents, before), isNear(cents, after)) < 0.01;
+      });
 
-  supported.forEach(({cents}) => {
-    const near = Math.min(isNear(cents, before), isNear(cents, after));
+      return {
+        is_each_near: isEachNear,
+        is_mostly_supported: supported.length >= 10,
+        is_outputs_counted: res.outputs > res.payments,
+        is_payments_counted: res.payments > supported.length * 100,
+        is_significant: res.significance > 4,
+        is_supported: res.is_supported,
 
-    ok(near < 0.01, 'A window is priced before or after the jump');
+        // The day spent more of its time after the jump than before it
+        is_time_median: isNear(res.cents, after) < 0.005,
+        seconds: secondsIn(res.windows),
+        windows: res.windows.length,
+      };
+    },
+  },
+  {
+    args: {day: 2, max_price: 72000, min_price: 37200},
+    description: 'Retrieved blocks are not fetched again and give the same',
+    expected: {fetched: 0, is_same: true},
+    method: async args => {
+      const blocks = new Map();
+
+      const first = await estimateDay(Object.assign({blocks}, args));
+
+      const fetched = chain.calls.blocks;
+
+      const again = await estimateDay(Object.assign({blocks}, args));
+
+      return {
+        fetched: chain.calls.blocks - fetched,
+        is_same: isDeepStrictEqual(again, first),
+      };
+    },
+  },
+  {
+    args: {day: 2, max_price: 72000, min_price: 37200},
+    description: 'Time is counted once when block times go backwards',
+    expected: {
+      fourth: 60 * 60 * 2,
+      seconds: secondsPerDay,
+      third: 60 * 60 * 2,
+    },
+    method: async args => {
+      const {heights} = await getBlocksForDate({
+        date: chain.day_name(args.day),
+        height: chain.tip,
+        lnd: chain.lnd,
+      });
+
+      // The block that ends the third window is stamped three hours ahead, so
+      // the block that ends the fourth window appears to come before it
+      const [ahead] = heights.slice(35, 36);
+
+      const shifted = makeChain({
+        hourly_moves: hourlyMoves,
+        prices: Array(5).fill(before),
+        quiet_days: [3],
+        time_shifts: {[ahead]: 60 * 60 * 3},
+      });
+
+      const {windows} = await estimateDay(Object.assign({}, args, {
+        lnd: shifted.lnd,
+      }));
+
+      return {
+        fourth: windows[3].seconds,
+        seconds: secondsIn(windows),
+        third: windows[2].seconds,
+      };
+    },
+  },
+  {
+    args: {day: 2, max_price: 62000, min_price: 38440},
+    description: 'Windows found outside the price window are not counted',
+    expected: {cents: undefined, is_mostly_widened: true, is_supported: false},
+    method: async args => {
+      const res = await estimateDay(args);
+
+      // Windows after the jump are above the window and are widened
+      const widened = res.windows.filter(n => !!n.is_widened);
+
+      return {
+        cents: res.cents,
+        is_mostly_widened: widened.length >= 5,
+        is_supported: res.is_supported,
+      };
+    },
+  },
+  {
+    args: {day: 3, max_price: 72000, min_price: 37200},
+    description: 'A day without round payments has no supported windows',
+    expected: {is_supported: false, is_unsupported: true, windows: 12},
+    method: async args => {
+      const res = await estimateDay(args);
+
+      const supported = res.windows.filter(n => n.is_supported);
+
+      return {
+        is_supported: res.is_supported,
+
+        // Only the window that reaches into the next day can be supported
+        is_unsupported: supported.length <= 1,
+        windows: res.windows.length,
+      };
+    },
+  },
+];
+
+tests.forEach(({args, description, expected, method}) => {
+  return test(description, async () => {
+    deepEqual(await method(args), expected, 'Got expected windows');
 
     return;
   });
-
-  // The day spent more of its time after the jump than before it
-  ok(isNear(res.cents, after) < 0.005, 'The price is the time median');
-  deepEqual(res.is_supported, true, 'The windows support the price');
-  ok(res.payments > supported.length * 100, 'Window payments are counted');
-  ok(res.outputs > res.payments, 'Window outputs are counted');
-  ok(res.significance > 4, 'The measures of the median window are given');
-
-  const fetched = chain.calls.blocks;
-
-  const again = await method({
-    blocks,
-    heights,
-    lnd: chain.lnd,
-    max_price: 72000,
-    min_price: 37200,
-    times: new Map(),
-  });
-
-  deepEqual(chain.calls.blocks, fetched, 'Retrieved blocks are not refetched');
-  deepEqual(again, res, 'The same windows give the same price');
-
-  return;
-});
-
-test('Time is counted once when block times go backwards', async () => {
-  const {heights} = await getBlocksForDate({
-    date: chain.day_name(2),
-    height: chain.tip,
-    lnd: chain.lnd,
-  });
-
-  // The block that ends the third window is stamped three hours ahead, so the
-  // block that ends the fourth window appears to come before it
-  const [ahead] = heights.slice(35, 36);
-
-  const shifted = makeChain({
-    hourly_moves: hourlyMoves,
-    prices: Array(5).fill(before),
-    quiet_days: [3],
-    time_shifts: {[ahead]: 60 * 60 * 3},
-  });
-
-  const res = await method({
-    heights,
-    blocks: new Map(),
-    lnd: shifted.lnd,
-    max_price: 72000,
-    min_price: 37200,
-    times: new Map(),
-  });
-
-  const covered = res.windows.reduce((sum, n) => sum + n.seconds, 0);
-
-  deepEqual(covered, secondsPerDay, 'Each second is counted once');
-  deepEqual(res.windows[2].seconds, 60 * 60 * 2, 'The window ahead is 2h');
-  deepEqual(res.windows[3].seconds, 60 * 60 * 2, 'So is the window after it');
-
-  return;
-});
-
-test('Windows found outside the price window are not counted', async () => {
-  const {heights} = await getBlocksForDate({
-    date: chain.day_name(2),
-    height: chain.tip,
-    lnd: chain.lnd,
-  });
-
-  // The window is below the price after the jump
-  const res = await method({
-    heights,
-    blocks: new Map(),
-    lnd: chain.lnd,
-    max_price: 62000,
-    min_price: 38440,
-    times: new Map(),
-  });
-
-  const widened = res.windows.filter(n => !!n.is_widened);
-
-  ok(widened.length >= 5, 'Windows after the jump are widened');
-  deepEqual(res.is_supported, false, 'Windows before do not cover half');
-  deepEqual(res.cents, undefined, 'No price is given');
-
-  return;
-});
-
-test('A day without round payments has no supported windows', async () => {
-  const {heights} = await getBlocksForDate({
-    date: chain.day_name(3),
-    height: chain.tip,
-    lnd: chain.lnd,
-  });
-
-  const res = await method({
-    heights,
-    blocks: new Map(),
-    lnd: chain.lnd,
-    max_price: 72000,
-    min_price: 37200,
-    times: new Map(),
-  });
-
-  const supported = res.windows.filter(n => n.is_supported);
-
-  // The last window reaches into the next day, which has round payments
-  ok(supported.length <= 1, 'Only the window into the next day is supported');
-  deepEqual(res.is_supported, false, 'The windows do not support a price');
-  deepEqual(res.windows.length, 12, 'All the windows are reported');
-
-  return;
 });

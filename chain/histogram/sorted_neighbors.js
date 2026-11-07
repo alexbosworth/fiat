@@ -21,8 +21,6 @@ const range = (a, b) => [...Array(b - a).keys()].map(i => a + i);
   }
 */
 module.exports = args => {
-  const {bins, exclude, radius, value} = args;
-
   const first = max(Number(), args.min_bin);
 
   // The shares of the neighbors of a bin, kept in order from bin to bin
@@ -30,28 +28,29 @@ module.exports = args => {
 
   // Moving on to a bin only changes the bins at the edges of its reach and at
   // the edges of the bins left out around it
-  const edges = [-1 - radius, -1 - exclude, exclude, radius]
+  const edges = [-1 - args.radius, -1 - args.exclude]
+    .concat([args.exclude, args.radius])
     .filter((offset, i, offsets) => offsets.indexOf(offset) === i);
 
   // A neighbor of a bin is within its reach and beyond the bins left out
   const isNeighbor = (index, bin) => {
     const distance = abs(index - bin);
 
-    const isBin = index >= first && index < bins.length;
+    const isBin = index >= first && index < args.bins.length;
 
-    return isBin && distance > exclude && distance <= radius;
+    return isBin && distance > args.exclude && distance <= args.radius;
   };
 
   // Put the share of a bin in its place among the sorted shares
   const add = index => {
-    const at = lowerBound({sorted, value: bins[index]}).index;
+    const at = lowerBound({sorted, value: args.bins[index]}).index;
 
-    return sorted.splice(at, Number(), bins[index]);
+    return sorted.splice(at, Number(), args.bins[index]);
   };
 
   // Take the share of a bin out of the sorted shares
   const drop = index => {
-    const at = lowerBound({sorted, value: bins[index]}).index;
+    const at = lowerBound({sorted, value: args.bins[index]}).index;
 
     return sorted.splice(at, 1);
   };
@@ -72,17 +71,17 @@ module.exports = args => {
   };
 
   // The first bin starts out with all of its neighbors
-  range(Number(), min(bins.length, radius + 1))
+  range(Number(), min(args.bins.length, args.radius + 1))
     .filter(index => isNeighbor(index, Number()))
     .forEach(add);
 
-  const values = bins.map((share, bin) => {
+  const values = args.bins.map((share, bin) => {
     // A bin after the first moves the neighbors on from the bin before it
     if (!!bin) {
       step(bin);
     }
 
-    return value(sorted);
+    return args.value(sorted);
   });
 
   return {values};

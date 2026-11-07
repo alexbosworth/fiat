@@ -1,6 +1,6 @@
 const {deepEqual} = require('node:assert').strict;
 const {mkdtempSync} = require('fs');
-const {ok} = require('node:assert').strict;
+const {mock} = require('node:test');
 const {readFileSync} = require('fs');
 const test = require('node:test');
 const {tmpdir} = require('os');
@@ -13,6 +13,7 @@ const {makeChain} = require('./../fixtures');
 const method = require('./../../scripts/update_known_prices');
 const {methodVersion} = require('./../../chain/known');
 
+const {abs} = Math;
 const {assign} = Object;
 const {day: earliest} = earliestSupportedDay({});
 const {keys} = Object;
@@ -26,204 +27,247 @@ const genesis = Date.parse(`${earliest}T00:00:00.000Z`) / 1000;
 // Known prices of the current version without any days
 const empty = stringify({version, prices: {}});
 
-test('Known prices are derived, checked and kept', async () => {
+// The days of the chains, which all start on the same day
+const chainDays = makeChain({genesis, days: 2});
+
+const days = [0, 1].map(n => chainDays.day_name(n));
+
+// Make a chain and a file of known prices without any days
+const makeUpdate = () => {
   const chain = makeChain({genesis, days: 2});
   const file = join(mkdtempSync(join(tmpdir(), 'known-')), 'prices.json');
-  const lines = [];
 
   writeFileSync(file, empty);
 
-  const update = spread => method({
+  return {chain, file};
+};
+
+// Update the known prices of a chain, with the lines that were logged
+const updateWith = async ({chain, file, request}) => {
+  const lines = [];
+
+  const res = await method({
     file,
     height: chain.tip,
     lnd: chain.lnd,
     log: line => lines.push(line),
-    request: makeCandlesRequest({chain, spread}),
+    request: request || makeCandlesRequest({chain, spread: 0.02}),
   });
 
-  const first = await update(0.02);
+  return {lines, res};
+};
 
-  const days = [0, 1].map(n => chain.day_name(n));
+const tests = [
+  {
+    args: {},
+    description: 'Known prices are derived, checked and kept',
+    expected: {
+      again: {added: [], failures: [], is_unchanged: true},
+      caught: {added: [], failures: [days[1]], is_unchanged: true},
+      first: {
+        added: days,
+        days,
+        failures: [],
+        hourly: days.length,
+        is_derived: true,
+        is_near_hourly: true,
+        is_summarized: true,
+        moved: 0,
+        shown: days.length,
+        version,
+      },
+    },
+    scenario: async () => {
+      const {chain, file} = makeUpdate();
 
-  deepEqual(first.added, days, 'Complete days are added');
-  deepEqual(first.failures, [], 'Every check passed');
+      const first = await updateWith({chain, file});
 
-  // Each day is shown against the median of its hours on Coinbase
-  const shown = lines.filter(n => n.includes(' from the hourly median, '));
+      const text = readFileSync(file, 'utf8');
 
-  deepEqual(shown.length, days.length, 'Each new day is compared');
+      const {prices} = parse(text);
 
-  const {hourly, moved} = first.report;
+      const again = await updateWith({chain, file});
 
-  deepEqual(hourly.count, days.length, 'The comparisons are summarized');
-  ok(hourly.percentile < 0.01, 'The prices are near the hourly medians');
-  ok(lines.includes('against the hourly medians of 2 days:'), 'Summary shown');
-  deepEqual(moved.count, 0, 'There was no last table to compare with');
+      // A changed price is caught by the recheck and the file is left alone
+      const changed = stringify({
+        version,
+        prices: assign({}, prices, {[days[1]]: prices[days[1]] - 1}),
+      });
 
-  const text = readFileSync(file, 'utf8');
+      writeFileSync(file, changed);
 
-  const {prices} = parse(text);
+      const caught = await updateWith({chain, file});
 
-  deepEqual(parse(text).version, version, 'The prices are of the method');
-  deepEqual(keys(prices), days, 'Each day has a price');
+      // Each day is shown against the median of its hours on Coinbase
+      const shown = first.lines.filter(n => {
+        return n.includes(' from the hourly median, ');
+      });
 
-  days.forEach(day => {
-    const truth = chain.prices[day] * 100;
+      const summary = 'against the hourly medians of 2 days:';
 
-    ok(Math.abs(prices[day] / truth - 1) < 0.01, 'Prices are derived');
+      return {
+        again: {
+          added: again.res.added,
+          failures: again.res.failures,
+          is_unchanged: readFileSync(file, 'utf8') === changed,
+        },
+        caught: {
+          added: caught.res.added,
+          failures: caught.res.failures.map(n => n.day),
+          is_unchanged: readFileSync(file, 'utf8') === changed,
+        },
+        first: {
+          added: first.res.added,
+          days: keys(prices),
+          failures: first.res.failures,
+          hourly: first.res.report.hourly.count,
+          is_derived: days.every(day => {
+            return abs(prices[day] / (chain.prices[day] * 100) - 1) < 0.01;
+          }),
+          is_near_hourly: first.res.report.hourly.percentile < 0.01,
+          is_summarized: first.lines.includes(summary),
+          moved: first.res.report.moved.count,
+          shown: shown.length,
+          version: parse(text).version,
+        },
+      };
+    },
+  },
+  {
+    args: {spread: -0.5},
+    description: 'A price outside the range traded stops the update',
+    expected: {added: [], failures: [days[0]], is_unchanged: true},
+    scenario: async ({spread}) => {
+      const {chain, file} = makeUpdate();
+
+      const {res} = await updateWith({
+        chain,
+        file,
+        request: makeCandlesRequest({chain, spread}),
+      });
+
+      return {
+        added: res.added,
+        failures: res.failures.map(n => n.day),
+        is_unchanged: readFileSync(file, 'utf8') === empty,
+      };
+    },
+  },
+  {
+    args: {shift: 0.1, spread: 0.2},
+    description: 'A price far from the hourly median stops the update',
+    expected: {
+      added: [],
+      failures: [{
+        day: days[0],
+        failure: 'the price is far from the hourly median',
+      }],
+      is_unchanged: true,
+    },
+    scenario: async ({shift, spread}) => {
+      const {chain, file} = makeUpdate();
+
+      // Trading is a tenth above the price, in a range wide enough for it
+      const {res} = await updateWith({
+        chain,
+        file,
+        request: makeCandlesRequest({chain, shift, spread}),
+      });
+
+      return {
+        added: res.added,
+        failures: res.failures.map(n => ({day: n.day, failure: n.failure})),
+        is_unchanged: readFileSync(file, 'utf8') === empty,
+      };
+    },
+  },
+  {
+    args: {},
+    description: 'A failed request for candles is tried again',
+    expected: {added: days, asked_again: 2, failures: []},
+    scenario: async () => {
+      const {chain, file} = makeUpdate();
+      const urls = [];
+
+      const request = makeCandlesRequest({chain, spread: 0.02});
+
+      mock.timers.enable({apis: ['setTimeout']});
+
+      const {res} = await updateWith({
+        chain,
+        file,
+        request: (args, cbk) => {
+          urls.push(args.url);
+
+          // Exit early when this is not the first request
+          if (urls.length !== 1) {
+            return request(args, cbk);
+          }
+
+          // The first request gets a server error
+          cbk(null, {statusCode: 520});
+
+          // The wait before trying again passes at once
+          return mock.timers.runAll();
+        },
+      });
+
+      mock.timers.reset();
+
+      return {
+        added: res.added,
+        asked_again: urls.filter(n => n === urls[0]).length,
+        failures: res.failures,
+      };
+    },
+  },
+  {
+    args: {},
+    description: 'The prices of another version are compared with new ones',
+    expected: {
+      added: days.length,
+      changed: 1,
+      compared: days.length,
+      is_move_measured: true,
+      is_summarized: true,
+      moved_day: days[1],
+    },
+    scenario: async () => {
+      const {chain, file} = makeUpdate();
+
+      await updateWith({chain, file});
+
+      const {prices} = parse(readFileSync(file, 'utf8'));
+
+      // The same prices from another version, with the last a percent higher
+      const older = assign({}, prices, {
+        [days[1]]: Math.round(prices[days[1]] * 1.01),
+      });
+
+      writeFileSync(file, stringify({prices: older, version: '0.00000000'}));
+
+      const {lines, res} = await updateWith({chain, file});
+
+      const {moved} = res.report;
+
+      const summary = '1 of 2 days moved from the last table:';
+
+      return {
+        added: res.added.length,
+        changed: moved.changed,
+        compared: moved.count,
+        is_move_measured: abs(moved.largest[0].difference + 0.0099) < 1e-4,
+        is_summarized: lines.includes(summary),
+        moved_day: moved.largest[0].day,
+      };
+    },
+  },
+];
+
+tests.forEach(({args, description, expected, scenario}) => {
+  return test(description, async () => {
+    deepEqual(await scenario(args), expected, 'Got expected update');
 
     return;
   });
-
-  const again = await update(0.02);
-
-  deepEqual(again.added, [], 'Nothing is added');
-  deepEqual(again.failures, [], 'Rechecked days are the same');
-  deepEqual(readFileSync(file, 'utf8'), text, 'The file is unchanged');
-
-  // A changed price is caught by the recheck and the file is left alone
-  const changed = stringify({
-    version,
-    prices: assign({}, prices, {[days[1]]: prices[days[1]] - 1}),
-  });
-
-  writeFileSync(file, changed);
-
-  const caught = await update(0.02);
-
-  deepEqual(caught.added, [], 'Nothing is added');
-  deepEqual(caught.failures.map(n => n.day), [days[1]], 'The day is named');
-  deepEqual(readFileSync(file, 'utf8'), changed, 'The file is unchanged');
-
-  return;
-});
-
-test('A price outside the range traded stops the update', async () => {
-  const chain = makeChain({genesis, days: 2});
-  const file = join(mkdtempSync(join(tmpdir(), 'known-')), 'prices.json');
-
-  writeFileSync(file, empty);
-
-  const res = await method({
-    file,
-    height: chain.tip,
-    lnd: chain.lnd,
-    log: () => {},
-    request: makeCandlesRequest({chain, spread: -0.5}),
-  });
-
-  deepEqual(res.added, [], 'Nothing is added');
-  deepEqual(res.failures.map(n => n.day), [chain.day_name(0)], 'Day named');
-  deepEqual(readFileSync(file, 'utf8'), empty, 'The file is unchanged');
-
-  return;
-});
-
-test('A price far from the hourly median stops the update', async () => {
-  const chain = makeChain({genesis, days: 2});
-  const file = join(mkdtempSync(join(tmpdir(), 'known-')), 'prices.json');
-
-  writeFileSync(file, empty);
-
-  // Trading is a tenth above the price, in a range wide enough to include it
-  const res = await method({
-    file,
-    height: chain.tip,
-    lnd: chain.lnd,
-    log: () => {},
-    request: makeCandlesRequest({chain, shift: 0.1, spread: 0.2}),
-  });
-
-  const [failure] = res.failures;
-
-  const far = 'the price is far from the hourly median';
-
-  deepEqual(res.added, [], 'Nothing is added');
-  deepEqual(failure.day, chain.day_name(0), 'The day is named');
-  deepEqual(failure.failure, far, 'The price is too far from the median');
-  deepEqual(readFileSync(file, 'utf8'), empty, 'The file is unchanged');
-
-  return;
-});
-
-test('A failed request for candles is tried again', async ({mock}) => {
-  mock.timers.enable({apis: ['setTimeout']});
-
-  const chain = makeChain({genesis, days: 2});
-  const file = join(mkdtempSync(join(tmpdir(), 'known-')), 'prices.json');
-  const urls = [];
-
-  const request = makeCandlesRequest({chain, spread: 0.02});
-
-  writeFileSync(file, empty);
-
-  const res = await method({
-    file,
-    height: chain.tip,
-    lnd: chain.lnd,
-    log: () => {},
-    request: (args, cbk) => {
-      urls.push(args.url);
-
-      // The first request gets a server error
-      if (urls.length === 1) {
-        cbk(null, {statusCode: 520});
-
-        // The wait before trying again passes at once
-        return mock.timers.runAll();
-      }
-
-      return request(args, cbk);
-    },
-  });
-
-  const days = [0, 1].map(n => chain.day_name(n));
-
-  deepEqual(res.added, days, 'Every day is added');
-  deepEqual(res.failures, [], 'Every check passed');
-  deepEqual(urls.filter(n => n === urls[0]).length, 2, 'Request tried again');
-
-  return;
-});
-
-test('The prices of another version are compared with new ones', async () => {
-  const chain = makeChain({genesis, days: 2});
-  const file = join(mkdtempSync(join(tmpdir(), 'known-')), 'prices.json');
-  const lines = [];
-
-  const update = () => method({
-    file,
-    height: chain.tip,
-    lnd: chain.lnd,
-    log: line => lines.push(line),
-    request: makeCandlesRequest({chain, spread: 0.02}),
-  });
-
-  writeFileSync(file, empty);
-
-  await update();
-
-  const {prices} = parse(readFileSync(file, 'utf8'));
-
-  const days = keys(prices);
-
-  // The same prices from another version, with the last a percent higher
-  const higher = Math.round(prices[days[1]] * 1.01);
-
-  const older = assign({}, prices, {[days[1]]: higher});
-
-  writeFileSync(file, stringify({prices: older, version: '0.00000000'}));
-
-  const res = await update();
-
-  const {moved} = res.report;
-
-  deepEqual(res.added.length, days.length, 'Every day is derived again');
-  deepEqual(moved.count, days.length, 'Every day is compared');
-  deepEqual(moved.changed, 1, 'One day moved');
-  deepEqual(moved.largest[0].day, chain.day_name(1), 'The day is named');
-  ok(Math.abs(moved.largest[0].difference + 0.0099) < 1e-4, 'The move');
-  ok(lines.includes('1 of 2 days moved from the last table:'), 'Summarized');
-
-  return;
 });

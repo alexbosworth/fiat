@@ -19,15 +19,16 @@ const {min} = Math;
   }
 */
 module.exports = args => {
-  const {center, excess} = args;
+  const limit = min(args.excess.length, args.center + noiseRadius + 1);
+  const start = max(Number(), args.min_bin, args.center - noiseRadius);
 
-  const start = max(Number(), args.min_bin, center - noiseRadius);
-
-  const end = max(start, min(excess.length, center + noiseRadius + 1));
+  const aboveStart = max(start, args.center + kernelBins + 1);
+  const belowEnd = max(start, args.center - kernelBins);
+  const end = max(start, limit);
 
   // The neighbors on each side, leaving out the spike itself
-  const below = excess.slice(start, max(start, center - kernelBins));
-  const above = excess.slice(max(start, center + kernelBins + 1), end);
+  const above = args.excess.slice(aboveStart, end);
+  const below = args.excess.slice(start, belowEnd);
 
   const sorted = below.concat(above).sort((a, b) => a - b);
 

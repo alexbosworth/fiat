@@ -17,6 +17,32 @@ const makeRequest = (chain, options) => {
   }));
 };
 
+// A chain whose days have no reference prices to compare with
+const unreferenced = makeRecentChain({});
+
+// Compare chain prices, with the first comparison and what was logged
+const compareLogged = async args => {
+  const logs = [];
+
+  const res = await method(Object.assign({}, args, {
+    logger: {info: line => logs.push(line)},
+  }));
+
+  const [comparison] = res.comparisons;
+
+  const [code, message, details] = comparison.error;
+
+  return {
+    cents: comparison.cents,
+    date: comparison.date,
+    error: [code, message],
+    error_day: details.day,
+    error_reason: details.err[1],
+    logged: logs.map(line => line.compared.error[1]),
+    records: res.records,
+  };
+};
+
 const makeArgs = overrides => {
   const chain = makeRecentChain({});
 
@@ -72,39 +98,33 @@ const tests = [
     description: 'Capping near round values is for own block estimates',
     error: [400, 'ExpectedOwnBlockEstimatesToCapNearRoundValues'],
   },
+  {
+    args: {
+      dates: [unreferenced.day_name(2)],
+      lnd: unreferenced.lnd,
+      request: (args, cbk) => cbk('err'),
+    },
+    description: 'A date with no reference price is reported, not derived',
+    expected: {
+      cents: undefined,
+      date: unreferenced.day_name(2),
+      error: [503, 'FailedToGetReferencePriceForDay'],
+      error_day: unreferenced.day_name(2),
+      error_reason: 'FailedToGetReferencePriceFromProviders',
+      logged: ['FailedToGetReferencePriceForDay'],
+      records: [],
+    },
+  },
 ];
 
-tests.forEach(({args, description, error}) => {
+tests.forEach(({args, description, error, expected}) => {
   return test(description, async () => {
-    await rejects(method(args), error, 'Got expected error');
+    if (!!error) {
+      await rejects(method(args), error, 'Got expected error');
+    } else {
+      deepEqual(await compareLogged(args), expected, 'Got expected result');
+    }
 
     return;
   });
-});
-
-test('A date with no reference price is reported, not derived', async () => {
-  const chain = makeRecentChain({});
-  const logs = [];
-
-  const res = await method({
-    dates: [chain.day_name(2)],
-    lnd: chain.lnd,
-    logger: {info: log => logs.push(log)},
-    request: (args, cbk) => cbk('err'),
-  });
-
-  const [comparison] = res.comparisons;
-
-  deepEqual(comparison.date, chain.day_name(2), 'The date is reported');
-  deepEqual(comparison.cents, undefined, 'No price was derived');
-  const [code, message, details] = comparison.error;
-
-  deepEqual([code, message], [503, 'FailedToGetReferencePriceForDay'], 'Err');
-  deepEqual(details.day, chain.day_name(2), 'The day is named');
-  deepEqual(details.err[1], 'FailedToGetReferencePriceFromProviders', 'Why');
-  deepEqual(res.records, [], 'Nothing was derived');
-  deepEqual(logs.length, 1, 'Only the comparison is logged');
-  deepEqual(logs[0].compared.error[1], 'FailedToGetReferencePriceForDay');
-
-  return;
 });

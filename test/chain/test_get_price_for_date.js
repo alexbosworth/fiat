@@ -1,22 +1,35 @@
 const {deepEqual} = require('node:assert').strict;
-const {ok} = require('node:assert').strict;
 const {rejects} = require('node:assert').strict;
 const test = require('node:test');
 
-const {makeChain: makeFixtureChain} = require('./../fixtures');
+const {makeChain} = require('./../fixtures');
 const {makeStore} = require('./../fixtures');
 const method = require('./../../chain/estimates/get_price_for_date');
 const {methodVersion} = require('./../../chain/known');
 
 const centsPerDollar = 100;
-
-// Chains start well after the earliest supported day
 const genesis = Date.parse('2026-01-01T00:00:00.000Z') / 1000;
+const {version} = methodVersion({});
 
-const makeChain = args => makeFixtureChain(Object.assign({genesis}, args));
+const chain = makeChain({genesis});
+
+// Make a store with a price from blocks past the chain tip
+const makeAheadStore = ({}) => {
+  const store = makeStore({chain, known: [2]});
+
+  store.known.rates[chain.day_name(5)] = {
+    version,
+    block_id: 'ff'.repeat(32),
+    blocks: [chain.tip + 10, chain.tip + 150],
+    cents: chain.prices[chain.day_name(2)] * centsPerDollar,
+  };
+
+  return store;
+};
+
+const aheadStore = makeAheadStore({});
 
 const makeArgs = overrides => {
-  const chain = makeChain({});
   const store = makeStore({});
 
   const args = {
@@ -33,6 +46,11 @@ const makeArgs = overrides => {
 };
 
 const tests = [
+  {
+    args: makeArgs({blocks: {}}),
+    description: 'Kept blocks are expected to be a map',
+    error: [400, 'ExpectedKeptBlocksMapToGetPriceForDate'],
+  },
   {
     args: makeArgs({date: undefined}),
     description: 'A date is required',
@@ -111,48 +129,28 @@ const tests = [
       {err: {details: 'err'}},
     ],
   },
+  {
+    args: makeArgs({
+      date: chain.day(3),
+      get_prices: aheadStore.get_prices,
+      put_price: aheadStore.put_price,
+      remove_prices: () => {
+        throw new Error('UnexpectedRemovalOfPrices');
+      },
+    }),
+    description: 'A price beyond the chain tip is set aside, not removed',
+    expected: {cents: 5556326, is_provisional: false},
+  },
 ];
 
-tests.forEach(({args, description, error}) => {
+tests.forEach(({args, description, error, expected}) => {
   return test(description, async () => {
-    await rejects(method(args), error, 'Got expected error');
+    if (!!error) {
+      await rejects(method(args), error, 'Got expected error');
+    } else {
+      deepEqual(await method(args), expected, 'Got expected price');
+    }
 
     return;
   });
-});
-
-test('A price beyond the chain tip is set aside, not removed', async () => {
-  const chain = makeChain({});
-  const removals = [];
-
-  const store = makeStore({chain, known: [2]});
-
-  // A price from blocks past the chain tip, as when the node is catching up
-  store.known.rates[chain.day_name(5)] = {
-    blocks: [chain.tip + 10, chain.tip + 150],
-    cents: chain.prices[chain.day_name(2)] * centsPerDollar,
-    hash: 'ff'.repeat(32),
-    version: methodVersion({}).version,
-  };
-
-  const res = await method({
-    date: chain.day(3),
-    get_prices: store.get_prices,
-    height: chain.tip,
-    lnd: chain.lnd,
-    put_price: store.put_price,
-    remove_prices: ({removed}, cbk) => {
-      removals.push(removed);
-
-      return cbk();
-    },
-  });
-
-  const expected = chain.prices[chain.day_name(3)] * centsPerDollar;
-
-  ok(Math.abs(res.cents / expected - 1) < 0.01, 'The price is found');
-  deepEqual(removals, [], 'The price past the tip is not reported');
-  ok(!!store.known.rates[chain.day_name(5)], 'The price past the tip is kept');
-
-  return;
 });

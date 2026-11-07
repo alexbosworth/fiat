@@ -87,7 +87,7 @@ tests.forEach(({args, description, error, expected}) => {
     ok(res.outputs > 0, 'Outputs count is returned');
     ok(res.payments > 0, 'Payments count is returned');
     ok(res.spikes.length > 0, 'Spike strengths are returned');
-    deepEqual(res.hash.length, 64, 'Last block hash is returned');
+    deepEqual(res.block_id.length, 64, 'Last block id is returned');
     deepEqual(res.is_supported, true, 'Estimate is supported');
     deepEqual(res.is_widened, undefined, 'Search was not widened');
     deepEqual(res.sample_blocks, expected.sample_blocks, 'Sample is counted');

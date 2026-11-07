@@ -4,6 +4,7 @@ const {returnResult} = require('asyncjs-util');
 const {fileVersion} = require('./constants');
 const {isCalendarDay} = require('./../dates');
 
+const {isInteger} = Number;
 const isObject = n => !!n && typeof n === 'object' && !Array.isArray(n);
 const {keys} = Object;
 const missingFileCode = 'ENOENT';
@@ -23,10 +24,10 @@ const {parse} = JSON;
     priors: {
       <Day YYYY-MM-DD String>: {
         [agreement]: <Spike Strengths Agreement With Prior Weights Number>
+        [block_id]: <Last Block Id Hex String>
         [blocks]: [<First Block Height Number>, <Last Block Height Number>]
         cents: <USD Cents Per BTC Number>
         [confidence]: <Best Position Score Over Best Alias Score Number>
-        [hash]: <Last Block Hash Hex String>
         [outputs]: <Payment Outputs Considered Count Number>
         [payments]: <Estimated Round USD Payments Count Number>
         [rivalry]: <Best Rival Position Score Over Best Score Number>
@@ -38,19 +39,19 @@ const {parse} = JSON;
     }
     provisional: {
       <Day YYYY-MM-DD String>: {
+        block_id: <Last Block Id Hex String>
         blocks: [<First Block Height Number>, <Last Block Height Number>]
         cents: <USD Cents Per BTC Number>
-        hash: <Last Block Hash Hex String>
         version: <Method Version String>
       }
     }
     rates: {
       <Day YYYY-MM-DD String>: {
         [agreement]: <Spike Strengths Agreement With Prior Weights Number>
+        [block_id]: <Last Block Id Hex String>
         [blocks]: [<First Block Height Number>, <Last Block Height Number>]
         cents: <USD Cents Per BTC Number>
         [confidence]: <Best Position Score Over Best Alias Score Number>
-        [hash]: <Last Block Hash Hex String>
         [outputs]: <Payment Outputs Considered Count Number>
         [payments]: <Estimated Round USD Payments Count Number>
         [rivalry]: <Best Rival Position Score Over Best Score Number>
@@ -135,6 +136,12 @@ module.exports = ({fs, path}, cbk) => {
         }
 
         const {version} = parseFile;
+
+        // Exit early when the prices are in an earlier format, so that they
+        // are derived again
+        if (isInteger(version) && version < fileVersion) {
+          return cbk(null, {priors: {}, provisional: {}, rates: {}});
+        }
 
         // The file format has a version of its own, apart from the method's
         if (version !== undefined && version !== fileVersion) {

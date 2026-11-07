@@ -64,13 +64,11 @@ const sameDay = 0;
   }
 */
 module.exports = (args, cbk) => {
-  const {dates, lnd, logger, request} = args;
-
   return new Promise((resolve, reject) => {
     return asyncAuto({
       // Check arguments
       validate: cbk => {
-        if (!isArray(dates) || !dates.every(isDay)) {
+        if (!isArray(args.dates) || !args.dates.every(isDay)) {
           return cbk([400, 'ExpectedYyyyMmDdDatesToCompareChainPrices']);
         }
 
@@ -92,11 +90,11 @@ module.exports = (args, cbk) => {
           return cbk([400, 'ExpectedOwnBlockEstimatesToCapNearRoundValues']);
         }
 
-        if (!lnd) {
+        if (!args.lnd) {
           return cbk([400, 'ExpectedAuthenticatedLndToCompareChainPrices']);
         }
 
-        if (!request) {
+        if (!args.request) {
           return cbk([400, 'ExpectedRequestFunctionToCompareChainPrices']);
         }
 
@@ -104,7 +102,7 @@ module.exports = (args, cbk) => {
       },
 
       // Get the current chain height
-      getHeight: ['validate', ({}, cbk) => getHeight({lnd}, cbk)],
+      getHeight: ['validate', ({}, cbk) => getHeight({lnd: args.lnd}, cbk)],
 
       // The day whose reference price guides the search for each date
       guides: ['validate', ({}, cbk) => {
@@ -116,7 +114,7 @@ module.exports = (args, cbk) => {
         // Bridging walks backward from the present, so the next day guides
         const days = !!args.is_own_reference ? sameDay : nextDay;
 
-        return cbk(null, dates.reduce((sum, date) => {
+        return cbk(null, args.dates.reduce((sum, date) => {
           sum[date] = addDays({days, day: date}).day;
 
           return sum;
@@ -137,7 +135,7 @@ module.exports = (args, cbk) => {
         // Log the progress of the derivation
         const log = record => {
           // Exit early when there is no logger
-          if (!logger) {
+          if (!args.logger) {
             return;
           }
 
@@ -150,10 +148,10 @@ module.exports = (args, cbk) => {
 
           // A full day price estimated without a guide is a starting point
           if (!!record.is_unguided) {
-            logger.info({chain_price: {starting_from: record.date}});
+            args.logger.info({chain_price: {starting_from: record.date}});
           }
 
-          return logger.info({
+          return args.logger.info({
             chain_price: {
               date: record.date,
               is_provisional: record.is_provisional,
@@ -169,7 +167,7 @@ module.exports = (args, cbk) => {
           date,
           derived,
           guide,
-          logger,
+          logger: args.logger,
           lookup: references[date],
         })
         .comparison;
@@ -179,12 +177,12 @@ module.exports = (args, cbk) => {
           return estimateOwnDay({
             date,
             guide,
-            lnd,
-            logger,
             times,
             height: getHeight.current_block_height,
             is_capping_near_round: args.is_capping_near_round,
             is_sampled: args.is_sampled,
+            lnd: args.lnd,
+            logger: args.logger,
           },
           (err, res) => {
             if (!!err) {
@@ -220,8 +218,8 @@ module.exports = (args, cbk) => {
             return cbk(null, compare({date, derived: {error}}));
           }
 
-          if (!!logger) {
-            logger.info({deriving_price_for: date});
+          if (!!args.logger) {
+            args.logger.info({deriving_price_for: date});
           }
 
           // Exit early when the search is guided by a reference price
@@ -238,11 +236,11 @@ module.exports = (args, cbk) => {
 
           return getPriceForDate({
             date,
-            lnd,
-            logger,
             unsupported,
             get_prices: ({}, cbk) => cbk(null, estimates),
             height: getHeight.current_block_height,
+            lnd: args.lnd,
+            logger: args.logger,
             put_price: (record, cbk) => {
               log(record);
 
@@ -266,13 +264,18 @@ module.exports = (args, cbk) => {
           });
         };
 
-        return asyncMapSeries(dates, (date, cbk) => {
+        return asyncMapSeries(args.dates, (date, cbk) => {
           // Reference prices are fetched as each date comes up
           const needed = new Set([date, guides[date]].filter(n => !!n));
 
           const days = [...needed].filter(n => !references[n]);
 
-          return getReferencePrices({days, logger, request}, (err, res) => {
+          return getReferencePrices({
+            days,
+            logger: args.logger,
+            request: args.request,
+          },
+          (err, res) => {
             if (!!err) {
               return cbk(err);
             }

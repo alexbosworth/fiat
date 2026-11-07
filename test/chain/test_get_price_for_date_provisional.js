@@ -1,5 +1,4 @@
 const {deepEqual} = require('node:assert').strict;
-const {ok} = require('node:assert').strict;
 const {rejects} = require('node:assert').strict;
 const test = require('node:test');
 
@@ -8,273 +7,255 @@ const {makeStore} = require('./../fixtures');
 const method = require('./../../chain/estimates/get_price_for_date');
 const {methodVersion} = require('./../../chain/known');
 
+const {abs} = Math;
 const centsPerDollar = 100;
+const {version} = methodVersion({});
 
 // Chains start well after the earliest supported day
 const genesis = Date.parse('2026-01-01T00:00:00.000Z') / 1000;
 
 const makeChain = args => makeFixtureChain(Object.assign({genesis}, args));
 
-test('A provisional price early in a day uses earlier blocks', async () => {
-  // The chain tip is one hour into the final day
-  const chain = makeChain({tip_hours: 1});
+// A price is near a price in dollars
+const isNear = (cents, usd) => abs(cents / (usd * centsPerDollar) - 1) < 0.01;
 
-  const store = makeStore({chain, known: [2]});
-
-  const res = await method({
-    date: chain.day(4),
-    get_prices: store.get_prices,
-    height: chain.tip,
-    lnd: chain.lnd,
-    put_price: store.put_price,
-  });
-
-  deepEqual(res.is_provisional, true, 'The price is provisional');
-
-  const provisional = store.puts.find(n => !!n.is_provisional);
-
-  deepEqual(provisional.blocks[1] - provisional.blocks[0] + 1, 36, 'Padded');
-  ok(provisional.blocks[1] <= chain.tip - 6, 'Only confirmed blocks are used');
-
-  // The blocks before the day were at the price of the day before
-  const before = chain.prices[chain.day_name(3)] * centsPerDollar;
-
-  ok(Math.abs(res.cents / before - 1) < 0.01, 'Price reflects blocks used');
-
-  return;
+// Arguments to look up the price of a day of a chain with a store of prices
+const makeArgs = ({chain, day, store}) => ({
+  date: chain.day(day),
+  get_prices: store.get_prices,
+  height: chain.tip,
+  lnd: chain.lnd,
+  put_price: store.put_price,
 });
 
-test('A provisional price is guided by the latest complete day', async () => {
-  const lookup = async ({chain}) => {
-    // Only the price of the day three days before the final day is known
-    const store = makeStore({chain, known: [1]});
-
-    const res = await method({
-      date: chain.day(4),
-      get_prices: store.get_prices,
-      height: chain.tip,
-      lnd: chain.lnd,
-      put_price: store.put_price,
-    });
-
-    return {res, priors: Object.keys(store.known.priors).sort()};
-  };
-
-  const midday = makeChain({});
-
-  const today = await lookup({chain: midday});
-
-  deepEqual(today.res.is_provisional, true, 'The price is provisional');
-
-  deepEqual(
-    today.priors,
-    [midday.day_name(2), midday.day_name(3)],
-    'The days up to the day before are bridged'
-  );
-
-  // Half an hour after midnight the day before is not complete yet
-  const midnight = makeChain({tip_hours: 0.5});
-
-  const early = await lookup({chain: midnight});
-
-  deepEqual(early.res.is_provisional, true, 'Early in the day is provisional');
-
-  deepEqual(
-    early.priors,
-    [midnight.day_name(2)],
-    'An incomplete day before is not bridged to'
-  );
-
-  return;
+// LND for a chain that is not expected to be asked for any blocks
+const unusedBlocksLnd = chain => ({
+  blocks: Object.assign({}, chain.lnd.blocks, {
+    getBlock: () => {
+      throw new Error('UnexpectedFetchOfBlock');
+    },
+  }),
+  chain: chain.lnd.chain,
 });
 
-test('A day that has not started yet is an error', async () => {
-  // A chain whose days are after the clock, so the chain tip sets the day
-  const chain = makeChain({genesis: Date.parse('2100-01-01') / 1000});
+// The chain tip is one hour into the final day
+const early = makeChain({tip_hours: 1});
+const earlyStore = makeStore({chain: early, known: [2]});
 
-  const store = makeStore({chain, known: [3]});
+// Only the price of the day three days before the final day is known
+const midday = makeChain({});
+const middayStore = makeStore({chain: midday, known: [1]});
 
-  const lookup = n => method({
-    date: chain.day(n),
-    get_prices: store.get_prices,
-    height: chain.tip,
-    lnd: chain.lnd,
-    put_price: store.put_price,
-  });
+// Half an hour after midnight the day before is not complete yet
+const midnight = makeChain({tip_hours: 0.5});
+const midnightStore = makeStore({chain: midnight, known: [1]});
 
-  await rejects(
-    lookup(5),
-    [400, 'DateAfterCurrentDayToGetPriceForDate', {day: chain.day_name(5)}],
-    'The day after the chain tip has no price'
-  );
+// A chain whose days are after the clock, so the chain tip sets the day
+const ahead = makeChain({genesis: Date.parse('2100-01-01') / 1000});
 
-  deepEqual(chain.calls.blocks, 0, 'No blocks are fetched');
+// A chain whose tip is far behind the clock, like a node that is syncing
+const behind = makeChain({});
 
-  const today = await lookup(4);
+// A provisional price of today whose blocks were lost to a damaged file
+const damaged = makeChain({});
+const damagedStore = makeStore({chain: damaged, known: [3]});
 
-  deepEqual(today.is_provisional, true, 'The day of the tip is provisional');
+damagedStore.known.provisional[damaged.day_name(4)] = {
+  version,
+  blocks: 'blocks',
+  cents: 1000000,
+};
 
-  return;
-});
+// A provisional price of today derived at nearly the chain tip
+const recent = makeChain({});
+const recentStore = makeStore({chain: recent, known: [3]});
 
-test('A day the chain has not reached is an error', async () => {
-  // A chain whose tip is far behind the clock, like a node that is syncing
-  const chain = makeChain({});
+recentStore.known.provisional[recent.day_name(4)] = {
+  version,
+  blocks: [recent.tip - 30, recent.tip - 6],
+  cents: 1234567,
+};
 
-  const store = makeStore({chain, known: [3]});
+// A provisional price whose last block is twenty blocks below the tip
+const stale = makeChain({});
+const staleStore = makeStore({chain: stale, known: [3]});
 
-  const lookup = n => method({
-    date: chain.day(n),
-    get_prices: store.get_prices,
-    height: chain.tip,
-    lnd: chain.lnd,
-    put_price: store.put_price,
-  });
+staleStore.known.provisional[stale.day_name(4)] = {
+  version,
+  blocks: [stale.tip - 40, stale.tip - 20],
+  cents: 1,
+};
 
-  await rejects(
-    lookup(6),
-    [503, 'ChainHasNotReachedDayToGetPriceForDate', {day: chain.day_name(6)}],
-    'A day long after the chain tip has no price'
-  );
+// The final, incomplete day has no payments at all, or no round payments
+const empty = makeChain({empty_days: [4]});
+const quiet = makeChain({quiet_days: [4]});
 
-  deepEqual(chain.calls.blocks, 0, 'No blocks are fetched');
+// The latest complete day is known at double its true price
+const aliased = makeChain({});
+const aliasedStore = makeStore({});
 
-  // The next day starts a few hours after the time of the chain tip
-  const next = await lookup(5);
+aliasedStore.known.rates[aliased.day_name(3)] = {
+  version,
+  blocks: [437, 580],
+  cents: aliased.prices[aliased.day_name(3)] * centsPerDollar * 2,
+};
 
-  deepEqual(next.is_provisional, true, 'A day just after the tip is priced');
+const tests = [
+  {
+    args: makeArgs({chain: early, day: 4, store: earlyStore}),
+    description: 'A provisional price early in a day uses earlier blocks',
+    expected: {
+      is_at_price_before: true,
+      is_confirmed_only: true,
+      is_provisional: true,
+      padded_blocks: 36,
+    },
+    measure: res => {
+      const {blocks} = earlyStore.puts.find(n => !!n.is_provisional);
 
-  return;
-});
+      // The blocks before the day were at the price of the day before
+      const before = early.prices[early.day_name(3)];
 
-test('A provisional price with damaged blocks is not reused', async () => {
-  const chain = makeChain({});
-
-  const store = makeStore({chain, known: [3]});
-
-  // A provisional price of today whose blocks were lost to a damaged file
-  store.known.provisional[chain.day_name(4)] = {
-    blocks: 'blocks',
-    cents: 1000000,
-    version: methodVersion({}).version,
-  };
-
-  const res = await method({
-    date: chain.day(4),
-    get_prices: store.get_prices,
-    height: chain.tip,
-    lnd: chain.lnd,
-    put_price: store.put_price,
-  });
-
-  const expected = chain.prices[chain.day_name(4)] * centsPerDollar;
-
-  ok(Math.abs(res.cents / expected - 1) < 0.01, 'The price is derived again');
-
-  return;
-});
-
-test('A recent provisional price is reused, an old one is not', async () => {
-  const chain = makeChain({});
-
-  const store = makeStore({chain, known: [3]});
-
-  const lookup = () => method({
-    date: chain.day(4),
-    get_prices: store.get_prices,
-    height: chain.tip,
-    lnd: chain.lnd,
-    put_price: store.put_price,
-  });
-
-  const first = await lookup();
-
-  deepEqual(first.is_provisional, true, 'The price is provisional');
-
-  const fetched = chain.calls.blocks;
-
-  deepEqual(await lookup(), first, 'A recent provisional price is reused');
-  deepEqual(chain.calls.blocks, fetched, 'No blocks are fetched again');
-
-  // A provisional price whose last block is twenty blocks below the tip
-  store.known.provisional[chain.day_name(4)] = {
-    blocks: [chain.tip - 40, chain.tip - 20],
-    cents: 1,
-    version: methodVersion({}).version,
-  };
-
-  const again = await lookup();
-
-  deepEqual(again, first, 'An old provisional price is derived again');
-  ok(chain.calls.blocks > fetched, 'The blocks are fetched again');
-
-  return;
-});
-
-test('A provisional price from no payments is an error', async () => {
-  // The final, incomplete day has no payments at all
-  const chain = makeChain({empty_days: [4]});
-
-  const store = makeStore({chain, known: [3]});
-
-  await rejects(
-    method({
-      date: chain.day(4),
-      get_prices: store.get_prices,
-      height: chain.tip,
-      lnd: chain.lnd,
-      put_price: store.put_price,
+      return {
+        is_at_price_before: isNear(res.cents, before),
+        is_confirmed_only: blocks[1] <= early.tip - 6,
+        is_provisional: res.is_provisional,
+        padded_blocks: blocks[1] - blocks[0] + 1,
+      };
+    },
+  },
+  {
+    args: makeArgs({chain: midday, day: 4, store: middayStore}),
+    description: 'A provisional price is guided by the latest complete day',
+    expected: {
+      is_provisional: true,
+      priors: [midday.day_name(2), midday.day_name(3)],
+    },
+    measure: res => ({
+      is_provisional: res.is_provisional,
+      priors: Object.keys(middayStore.known.priors).sort(),
     }),
-    [503, 'FailedToFindSupportedProvisionalPrice', {day: chain.day_name(4)}],
-    'The provisional price is not supported'
-  );
-
-  return;
-});
-
-test('A provisional price that cannot be supported is an error', async () => {
-  // The final, incomplete day has no round payments
-  const chain = makeChain({quiet_days: [4]});
-
-  const store = makeStore({chain, known: [3]});
-
-  await rejects(
-    method({
-      date: chain.day(4),
-      get_prices: store.get_prices,
-      height: chain.tip,
-      lnd: chain.lnd,
-      put_price: store.put_price,
+  },
+  {
+    args: makeArgs({chain: midnight, day: 4, store: midnightStore}),
+    description: 'An incomplete day before is not bridged to',
+    expected: {is_provisional: true, priors: [midnight.day_name(2)]},
+    measure: res => ({
+      is_provisional: res.is_provisional,
+      priors: Object.keys(midnightStore.known.priors).sort(),
     }),
-    [503, 'FailedToFindSupportedProvisionalPrice', {day: chain.day_name(4)}],
-    'The provisional price is not supported'
-  );
-
-  return;
-});
-
-test('A provisional price at an alias of its guide conflicts', async () => {
-  const chain = makeChain({});
-  const store = makeStore({});
-
-  // The latest complete day is known at double its true price
-  store.known.rates[chain.day_name(3)] = {
-    blocks: [437, 580],
-    cents: chain.prices[chain.day_name(3)] * centsPerDollar * 2,
-    version: methodVersion({}).version,
-  };
-
-  await rejects(
-    method({
-      date: chain.day(4),
-      get_prices: store.get_prices,
-      height: chain.tip,
-      lnd: chain.lnd,
-      put_price: store.put_price,
+  },
+  {
+    args: Object.assign(
+      makeArgs({chain: ahead, day: 5, store: makeStore({})}),
+      {lnd: unusedBlocksLnd(ahead)}
+    ),
+    description: 'A day that has not started yet is an error',
+    error: [
+      400,
+      'DateAfterCurrentDayToGetPriceForDate',
+      {day: ahead.day_name(5)},
+    ],
+  },
+  {
+    args: makeArgs({
+      chain: ahead,
+      day: 4,
+      store: makeStore({chain: ahead, known: [3]}),
     }),
-    err => err[1] === 'FoundProvisionalPriceAtAliasOfGuidePrice',
-    'The provisional price conflicts with the guide'
-  );
+    description: 'The day of the chain tip is provisional',
+    expected: {is_provisional: true},
+    measure: res => ({is_provisional: res.is_provisional}),
+  },
+  {
+    args: Object.assign(
+      makeArgs({chain: behind, day: 6, store: makeStore({})}),
+      {lnd: unusedBlocksLnd(behind)}
+    ),
+    description: 'A day the chain has not reached is an error',
+    error: [
+      503,
+      'ChainHasNotReachedDayToGetPriceForDate',
+      {day: behind.day_name(6)},
+    ],
+  },
+  {
+    args: makeArgs({
+      chain: behind,
+      day: 5,
+      store: makeStore({chain: behind, known: [3]}),
+    }),
+    description: 'A day starting a few hours after the chain tip is priced',
+    expected: {is_provisional: true},
+    measure: res => ({is_provisional: res.is_provisional}),
+  },
+  {
+    args: makeArgs({chain: damaged, day: 4, store: damagedStore}),
+    description: 'A provisional price with damaged blocks is not reused',
+    expected: {is_derived_again: true},
+    measure: res => ({
+      is_derived_again: isNear(res.cents, damaged.prices[damaged.day_name(4)]),
+    }),
+  },
+  {
+    args: Object.assign(
+      makeArgs({chain: recent, day: 4, store: recentStore}),
+      {lnd: unusedBlocksLnd(recent)}
+    ),
+    description: 'A recent provisional price is reused',
+    expected: {cents: 1234567, is_provisional: true},
+    measure: res => res,
+  },
+  {
+    args: makeArgs({chain: stale, day: 4, store: staleStore}),
+    description: 'An old provisional price is derived again',
+    expected: {is_derived_again: true, is_provisional: true},
+    measure: res => ({
+      is_derived_again: isNear(res.cents, stale.prices[stale.day_name(4)]),
+      is_provisional: res.is_provisional,
+    }),
+  },
+  {
+    args: makeArgs({
+      chain: empty,
+      day: 4,
+      store: makeStore({chain: empty, known: [3]}),
+    }),
+    description: 'A provisional price from no payments is an error',
+    error: [
+      503,
+      'FailedToFindSupportedProvisionalPrice',
+      {day: empty.day_name(4)},
+    ],
+  },
+  {
+    args: makeArgs({
+      chain: quiet,
+      day: 4,
+      store: makeStore({chain: quiet, known: [3]}),
+    }),
+    description: 'A provisional price that cannot be supported is an error',
+    error: [
+      503,
+      'FailedToFindSupportedProvisionalPrice',
+      {day: quiet.day_name(4)},
+    ],
+  },
+  {
+    args: makeArgs({chain: aliased, day: 4, store: aliasedStore}),
+    description: 'A provisional price at an alias of its guide conflicts',
+    error: err => err[1] === 'FoundProvisionalPriceAtAliasOfGuidePrice',
+  },
+];
 
-  return;
+tests.forEach(({args, description, error, expected, measure}) => {
+  return test(description, async () => {
+    if (!!error) {
+      await rejects(method(args), error, 'Got expected error');
+    } else {
+      deepEqual(measure(await method(args)), expected, 'Got expected price');
+    }
+
+    return;
+  });
 });

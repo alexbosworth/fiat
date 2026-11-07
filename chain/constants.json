@@ -7,6 +7,7 @@
   "defaultMinPrice": 100,
   "fetchLimit": 4,
   "half": 0.5,
+  "keptBlocks": 432,
   "kernelBins": 2,
   "maxTokens": 10000000000000,
   "minAliasMargin": 1,

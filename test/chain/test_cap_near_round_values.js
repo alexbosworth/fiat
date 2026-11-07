@@ -1,5 +1,4 @@
 const {deepEqual} = require('node:assert').strict;
-const {ok} = require('node:assert').strict;
 const test = require('node:test');
 
 const method = require('./../../chain/outputs/cap_near_round_values');
@@ -33,63 +32,68 @@ const makeBackground = () => {
 // The background's count in a band one percent wide
 const bandShare = backgroundCount / (2 * Math.log(10)) * 0.01;
 
-test('Values just below a round amount are capped to around them', () => {
-  const random = makeRandom(2);
+// A band holds about as many values as the background puts in it
+const isBackground = count => Math.abs(count / bandShare - 1) < 0.25;
 
-  // Round amounts of BTC sent with the fee taken out of the amount
-  const fees = [...Array(3000).keys()].map(() => {
-    return 1e6 - Math.round(1500 + random() * 1500);
+// Round amounts of BTC sent with the fee taken out of the amount
+const makeFeesTakenOut = ({random}) => [...Array(3000).keys()].map(() => {
+  return 1e6 - Math.round(1500 + random() * 1500);
+});
+
+// A service paying a fixed amount just above a round amount
+const makeFixedAbove = ({random}) => [...Array(2000).keys()].map(() => {
+  return Math.round(2004000 + random() * 2000);
+});
+
+const belowRound = makeBackground().concat(makeFeesTakenOut({
+  random: makeRandom(2),
+}));
+
+const aboveRound = makeBackground().concat(makeFixedAbove({
+  random: makeRandom(3),
+}));
+
+const tests = [
+  {
+    args: {outputs: belowRound},
+    description: 'Values just below a round amount are capped to around them',
+    expected: {
+      far: countIn(belowRound, 3e6, 4e6),
+      is_background: true,
+      near: countIn(belowRound, 965e3, 995e3),
+    },
+    measure: ({outputs}) => ({
+      far: countIn(outputs, 3e6, 4e6),
+      is_background: isBackground(countIn(outputs, 995e3, 1005e3)),
+      near: countIn(outputs, 965e3, 995e3),
+    }),
+  },
+  {
+    args: {outputs: aboveRound},
+    description: 'Values just above a round amount are capped too',
+    expected: {is_background: true},
+    measure: ({outputs}) => ({
+      is_background: isBackground(countIn(outputs, 1990e3, 2010e3)),
+    }),
+  },
+  {
+    args: {outputs: makeBackground().concat(Array(500).fill(1e6))},
+    description: 'Exact round values are left to be capped on their own',
+    expected: {exact: 500},
+    measure: ({outputs}) => ({exact: outputs.filter(n => n === 1e6).length}),
+  },
+  {
+    args: {outputs: makeBackground()},
+    description: 'Values with no clear excess near round amounts are kept',
+    expected: {outputs: makeBackground().sort()},
+    measure: ({outputs}) => ({outputs: outputs.slice().sort()}),
+  },
+];
+
+tests.forEach(({args, description, expected, measure}) => {
+  return test(description, () => {
+    deepEqual(measure(method(args)), expected, 'Got expected outputs');
+
+    return;
   });
-
-  const outputs = makeBackground().concat(fees);
-
-  const capped = method({outputs}).outputs;
-
-  const before = countIn(outputs, 995e3, 1005e3);
-  const after = countIn(capped, 995e3, 1005e3);
-
-  ok(before > 3000, 'The band held the cluster');
-  ok(Math.abs(after / bandShare - 1) < 0.25, 'The band keeps the background');
-  deepEqual(countIn(capped, 965e3, 995e3), countIn(outputs, 965e3, 995e3));
-  deepEqual(countIn(capped, 3e6, 4e6), countIn(outputs, 3e6, 4e6), 'Far');
-
-  return;
-});
-
-test('Values just above a round amount are capped too', () => {
-  const random = makeRandom(3);
-
-  // A service paying a fixed amount just above a round amount
-  const fixed = [...Array(2000).keys()].map(() => {
-    return Math.round(2004000 + random() * 2000);
-  });
-
-  const capped = method({outputs: makeBackground().concat(fixed)}).outputs;
-
-  const after = countIn(capped, 1990e3, 2010e3);
-
-  ok(Math.abs(after / bandShare - 1) < 0.25, 'The band keeps the background');
-
-  return;
-});
-
-test('Exact round values are left to be capped on their own', () => {
-  const exact = Array(500).fill(1e6);
-
-  const capped = method({outputs: makeBackground().concat(exact)}).outputs;
-
-  deepEqual(capped.filter(n => n === 1e6).length, 500, 'Exact values stay');
-
-  return;
-});
-
-test('Values with no clear excess near round amounts are kept', () => {
-  const outputs = makeBackground();
-
-  const capped = method({outputs}).outputs;
-
-  deepEqual(capped.length, outputs.length, 'Nothing is capped');
-  deepEqual(capped.slice().sort(), outputs.slice().sort(), 'Same values');
-
-  return;
 });

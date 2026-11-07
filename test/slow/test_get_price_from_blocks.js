@@ -108,36 +108,45 @@ const makeLnd = overrides => {
   return lnd;
 };
 
-test('Fetching progress is logged like a progress bar', async () => {
+// LND that serves the same block for every height
+const sameBlockLnd = makeLnd({
+  getBlock: ({}, cbk) => cbk(null, {raw_block: hexAsBuffer(first.block)}),
+});
+
+const heights = [...Array(48).keys()].map(i => 100 + i);
+
+// Get a price from blocks, with what was logged along the way
+const logsOf = async args => {
   const logs = [];
 
-  // A mock LND that serves the same block for every height
-  const block = hexAsBuffer(first.block);
+  await method(Object.assign({}, args, {logger: {info: n => logs.push(n)}}));
 
-  const lnd = makeLnd({getBlock: ({}, cbk) => cbk(null, {raw_block: block})});
+  return {logs};
+};
 
-  const heights = [...Array(48).keys()].map(i => 100 + i);
+const tests = [
+  {
+    args: {heights, date: '2024-01-02', lnd: sameBlockLnd},
+    description: 'Fetching progress is logged like a progress bar',
+    expected: {
+      logs: [
+        {fetching_blocks: {date: '2024-01-02', blocks: '0/48'}},
+        {fetching_blocks: {date: '2024-01-02', blocks: '24/48'}},
+        {fetching_blocks: {date: '2024-01-02', blocks: '48/48'}},
+      ],
+    },
+  },
+  {
+    args: {heights: heights.slice(0, 12), lnd: sameBlockLnd},
+    description: 'A short fetch is not worth logging progress for',
+    expected: {logs: []},
+  },
+];
 
-  const logger = {info: n => logs.push(n)};
+tests.forEach(({args, description, expected}) => {
+  return test(description, async () => {
+    deepEqual(await logsOf(args), expected, 'Got expected logs');
 
-  await method({heights, lnd, logger, date: '2024-01-02'});
-
-  deepEqual(logs, [
-    {fetching_blocks: {date: '2024-01-02', blocks: '0/48'}},
-    {fetching_blocks: {date: '2024-01-02', blocks: '24/48'}},
-    {fetching_blocks: {date: '2024-01-02', blocks: '48/48'}},
-  ],
-  'Progress is logged at the start, every two dozen blocks and at the end');
-
-  const short = [];
-
-  await method({
-    lnd,
-    heights: heights.slice(0, 12),
-    logger: {info: n => short.push(n)},
+    return;
   });
-
-  deepEqual(short, [], 'A short fetch is not worth logging progress for');
-
-  return;
 });

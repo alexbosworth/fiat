@@ -34,7 +34,9 @@ const yesterday = -1;
 /** Get the USD price of BTC on the day of a date using only chain data
 
   {
+    [blocks]: <Kept Blocks By Height Map Object>
     date: <ISO 8601 Date String>
+    [fetched]: <Block Fetched Function> ({height}) => {}
     get_prices: <Get Known Prices Function> ({}, cbk) => (err, {
       [priors]: {<Day YYYY-MM-DD String>: {cents: <USD Cents Number>}}
       [provisional]: {
@@ -50,6 +52,7 @@ const yesterday = -1;
     [logger]: <Winston Logger Object>
     put_price: <Remember Price Function> ({
       agreement: <Spike Strengths Agreement With Template Weights Number>
+      block_id: <Last Block Id Hex String>
       blocks: [<First Block Height Number>, <Last Block Height Number>]
       cents: <USD Cents Per BTC Number>
       confidence: <Best Position Score Over Best Alias Position Score Number>
@@ -58,7 +61,6 @@ const yesterday = -1;
       dispersion: <Peak Width Beyond Smoothing As Price Fraction Number>
       [drift]: <Second Half Price Change From First Half Price Number>
       evidence: <Share of Prior Weight Observable At the Price Number>
-      hash: <Last Block Hash Hex String>
       [is_provisional]: <Price Is For An Incomplete Day Bool>
       [is_sample]: <Price Is A Rough Estimate From Sample Blocks Bool>
       [is_widened]: <Price Was Found Outside the Expected Price Window Bool>
@@ -77,8 +79,8 @@ const yesterday = -1;
     }, cbk) => (err)
     [remove_prices]: <Remove Prices Function> ({
       removed: [{
+        block_id: <Last Block Id Hex String>
         day: <Day YYYY-MM-DD String>
-        hash: <Last Block Hash Hex String>
       }]
     }, cbk) => (err)
     [unsupported]: <Unsupported Estimates Map Object>
@@ -91,13 +93,14 @@ const yesterday = -1;
   }
 */
 module.exports = (args, cbk) => {
-  // The blocks of the day priced in full are kept for its other estimates
-  const dayBlocks = new Map();
-
   return new Promise((resolve, reject) => {
     return asyncAuto({
       // Check arguments
       validate: cbk => {
+        if (!!args.blocks && !(args.blocks instanceof Map)) {
+          return cbk([400, 'ExpectedKeptBlocksMapToGetPriceForDate']);
+        }
+
         if (!args.date || typeof args.date !== 'string') {
           return cbk([400, 'ExpectedDateToGetPriceForDate']);
         }
@@ -139,6 +142,11 @@ module.exports = (args, cbk) => {
 
       // The day of the date in UTC
       day: ['validate', ({}, cbk) => cbk(null, dayOfDate(args).day)],
+
+      // The blocks of the day priced in full are kept for its other estimates
+      dayBlocks: ['validate', ({}, cbk) => {
+        return cbk(null, args.blocks || new Map());
+      }],
 
       // Block times are kept across days to avoid retrieving them twice
       times: ['validate', ({}, cbk) => cbk(null, new Map())],
@@ -191,6 +199,7 @@ module.exports = (args, cbk) => {
             times,
             blocks: target.blocks,
             day: target.day,
+            fetched: args.fetched,
             height: args.height,
             is_sample: target.is_sample,
             is_unguided: target.is_unguided,
@@ -386,11 +395,12 @@ module.exports = (args, cbk) => {
 
       // Start from the latest complete day when no estimate is near the day
       coldStart: [
+        'dayBlocks',
         'estimate',
         'getStart',
         'nearest',
         'route',
-        ({estimate, getStart, nearest, route}, cbk) =>
+        ({dayBlocks, estimate, getStart, nearest, route}, cbk) =>
       {
         // Exit early when there is nothing to bridge to
         if (!route) {
@@ -431,10 +441,11 @@ module.exports = (args, cbk) => {
       // Step day by day from the nearest estimate towards the day
       bridge: [
         'coldStart',
+        'dayBlocks',
         'estimate',
         'estimates',
         'route',
-        ({estimate, estimates, route}, cbk) =>
+        ({dayBlocks, estimate, estimates, route}, cbk) =>
       {
         // Exit early when there is nothing to bridge to
         if (!route) {
@@ -499,11 +510,12 @@ module.exports = (args, cbk) => {
       estimateDay: [
         'bridge',
         'day',
+        'dayBlocks',
         'estimate',
         'estimates',
         'getBlocks',
         'reuse',
-        ({day, estimate, estimates, getBlocks, reuse}, cbk) =>
+        ({day, dayBlocks, estimate, estimates, getBlocks, reuse}, cbk) =>
       {
         // Exit early when the price is known or reused, or the day is not over
         if (!!estimates.rates[day] || !!reuse || !getBlocks.is_complete) {
@@ -573,10 +585,11 @@ module.exports = (args, cbk) => {
       // Derive a provisional price for an incomplete day
       provisional: [
         'day',
+        'dayBlocks',
         'estimates',
         'getPrice',
         'provisionalBlocks',
-        ({day, estimates, getPrice, provisionalBlocks}, cbk) =>
+        ({day, dayBlocks, estimates, getPrice, provisionalBlocks}, cbk) =>
       {
         // Exit early when there is no provisional price to derive
         if (!provisionalBlocks) {
@@ -586,6 +599,8 @@ module.exports = (args, cbk) => {
         return getProvisionalPrice({
           day,
           estimates,
+          blocks: dayBlocks,
+          fetched: args.fetched,
           heights: provisionalBlocks,
           lnd: args.lnd,
           logger: args.logger,

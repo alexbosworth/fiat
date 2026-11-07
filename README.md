@@ -10,7 +10,16 @@ release ship with the package in `chain/known/known_prices.json`.
 
 Make a method that gets historic USD prices of BTC from chain data
 
+When given a `blocks_path`, the payment outputs of the last three days of
+blocks are kept in a file there, so that later lookups, including those of
+later runs, only fetch the blocks that are new. Blocks are saved as they are
+fetched, so a run that is stopped part of the way through picks up where it
+left off. Blocks kept by another version of the method are fetched again, and
+a failure to read or write the file is logged and only means fetching again.
+The file has to be apart from the prices file, and it can be deleted.
+
     {
+      [blocks_path]: <Kept Blocks File Path String>
       fs: {
         getFile: <Read File Contents Function> (path, cbk) => {}
         makeDirectory: <Make Directory Function> (path, cbk) => {}

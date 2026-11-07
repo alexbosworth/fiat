@@ -20,38 +20,54 @@ const {version} = methodVersion({});
 // Chains start on the earliest supported day and have two complete days
 const genesis = Date.parse(`${earliest}T00:00:00.000Z`) / 1000;
 
-test('A node behind the shipped prices stops the update', async () => {
-  const chain = makeChain({genesis, days: 2});
-  const file = join(mkdtempSync(join(tmpdir(), 'known-')), 'prices.json');
+const chain = makeChain({genesis, days: 2});
+const file = join(mkdtempSync(join(tmpdir(), 'known-')), 'prices.json');
 
-  // Shipped prices that run past the days the node has reached
-  const shipped = [...Array(10).keys()].map(n => [chain.day_name(n), 5e6]);
+// Shipped prices that run past the days the node has reached
+const shipped = [...Array(10).keys()].map(n => [chain.day_name(n), 5e6]);
 
-  const text = stringify({version, prices: fromEntries(shipped)});
+const text = stringify({version, prices: fromEntries(shipped)});
 
-  writeFileSync(file, text);
+writeFileSync(file, text);
 
-  const res = await method({
-    file,
-    height: chain.tip,
-    lnd: chain.lnd,
-    log: () => {},
-    request: makeCandlesRequest({chain, spread: 0.02}),
+// Update the shipped prices, with the file and the blocks fetched afterwards
+const updatePrices = async args => {
+  const {added, failures} = await method(args);
+
+  return {
+    added,
+    failures,
+    blocks: chain.calls.blocks,
+    text: readFileSync(args.file, 'utf8'),
+  };
+};
+
+const tests = [
+  {
+    args: {
+      file,
+      height: chain.tip,
+      lnd: chain.lnd,
+      log: () => {},
+      request: makeCandlesRequest({chain, spread: 0.02}),
+    },
+    description: 'A node behind the shipped prices stops the update',
+    expected: {
+      text,
+      added: [],
+      blocks: 0,
+      failures: [{
+        day: chain.day_name(9),
+        failure: 'the node has not reached the last shipped day',
+      }],
+    },
+  },
+];
+
+tests.forEach(({args, description, expected}) => {
+  return test(description, async () => {
+    deepEqual(await updatePrices(args), expected, 'Got expected update');
+
+    return;
   });
-
-  deepEqual(res.added, [], 'Nothing is added');
-
-  deepEqual(
-    res.failures,
-    [{
-      day: chain.day_name(9),
-      failure: 'the node has not reached the last shipped day',
-    }],
-    'The update stops'
-  );
-
-  deepEqual(readFileSync(file, 'utf8'), text, 'The file is left as it was');
-  deepEqual(chain.calls.blocks, 0, 'No blocks are fetched');
-
-  return;
 });

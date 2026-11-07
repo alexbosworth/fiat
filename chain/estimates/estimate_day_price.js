@@ -3,7 +3,7 @@ const asyncTimesSeries = require('async/timesSeries');
 const {returnResult} = require('asyncjs-util');
 
 const estimateWindows = require('./estimate_windows');
-const {getBlockHash} = require('./../blocks');
+const {getBlockId} = require('./../blocks');
 const {getBlocksForDate} = require('./../blocks');
 const getPriceFromBlocks = require('./get_price_from_blocks');
 const {isCalendarDay} = require('./../../dates');
@@ -27,6 +27,7 @@ const sampleBlocksCount = 12;
   {
     [blocks]: <Retrieved Blocks By Height Map Object>
     date: <Day YYYY-MM-DD String>
+    [fetched]: <Block Fetched Function> ({height}) => {}
     height: <Current Best Chain Height Number>
     [is_capping_near_round]: <Cap Values Just Off Round BTC Amounts Too Bool>
     [is_sample]: <Estimate From A Sample of the Blocks Bool>
@@ -40,6 +41,7 @@ const sampleBlocksCount = 12;
   @returns via cbk or Promise
   {
     [agreement]: <Spike Strengths Agreement With Template Weights Number>
+    block_id: <Last Block Id Hex String>
     blocks: [<First Block Height Number>, <Last Block Height Number>]
     [cents]: <USD Cents Per BTC Number>
     [confidence]: <Best Position Score Over Best Alias Position Score Number>
@@ -47,7 +49,6 @@ const sampleBlocksCount = 12;
     [dispersion]: <Peak Width Beyond Smoothing As Price Fraction Number>
     [drift]: <Second Half Price Change From First Half Price Number>
     [evidence]: <Share of Prior Weight Observable At the Price Number>
-    hash: <Last Block Hash Hex String>
     is_supported: <Estimate Is Supported By the Data Bool>
     [is_unpriced]: <Blocks Give No Price At All Bool>
     [is_unsettled]: <Refinement Was Still Moving After Its Last Pass Bool>
@@ -118,11 +119,11 @@ module.exports = (args, cbk) => {
         return cbk();
       }],
 
-      // Get the hash of the last block on the day
-      getHash: ['checkComplete', 'getBlocks', ({getBlocks}, cbk) => {
+      // Get the id of the last block on the day
+      getId: ['checkComplete', 'getBlocks', ({getBlocks}, cbk) => {
         const {heights} = getBlocks;
 
-        return getBlockHash({
+        return getBlockId({
           height: heights[heights.length - 1],
           lnd: args.lnd,
         },
@@ -144,6 +145,7 @@ module.exports = (args, cbk) => {
             blocks,
             heights,
             date: args.date,
+            fetched: args.fetched,
             is_capping_near_round: args.is_capping_near_round,
             lnd: args.lnd,
             logger: args.logger,
@@ -196,6 +198,7 @@ module.exports = (args, cbk) => {
             blocks,
             logger,
             date: args.date,
+            fetched: args.fetched,
             heights: sample.heights,
             is_capping_near_round: args.is_capping_near_round,
             lnd: args.lnd,
@@ -306,6 +309,7 @@ module.exports = (args, cbk) => {
           blocks,
           heights,
           times,
+          fetched: args.fetched,
           is_capping_near_round: args.is_capping_near_round,
           lnd: args.lnd,
           max_price: args.max_price,
@@ -317,11 +321,11 @@ module.exports = (args, cbk) => {
       // The estimated price for the day
       price: [
         'getBlocks',
-        'getHash',
+        'getId',
         'getPrice',
         'getWindows',
         'isSupported',
-        ({getBlocks, getHash, getPrice, getWindows, isSupported}, cbk) =>
+        ({getBlocks, getId, getPrice, getWindows, isSupported}, cbk) =>
       {
         const {heights} = getBlocks;
 
@@ -332,6 +336,7 @@ module.exports = (args, cbk) => {
 
         return cbk(null, {
           agreement: price.agreement,
+          block_id: getId.id,
           blocks: [heights[Number()], heights[heights.length - 1]],
           cents: price.cents,
           confidence: price.confidence,
@@ -339,7 +344,6 @@ module.exports = (args, cbk) => {
           dispersion: price.dispersion,
           drift: price.drift,
           evidence: price.evidence,
-          hash: getHash.hash,
           is_supported: isSupported || isWindowed,
           is_unpriced: getPrice.is_unpriced,
           is_unsettled: price.is_unsettled,

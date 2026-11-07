@@ -12,6 +12,7 @@ const supportedFiat = 'USD';
 /** Make a method that gets historic USD prices of BTC from chain data
 
   {
+    [blocks_path]: <Kept Blocks File Path String>
     fs: {
       getFile: <Read File Contents Function> (path, cbk) => {}
       makeDirectory: <Make Directory Function> (path, cbk) => {}
@@ -37,20 +38,27 @@ const supportedFiat = 'USD';
     })
   }
 */
-module.exports = ({fs, lnd, logger, path}) => {
-  if (!fs || !fsMethods.every(method => typeof fs[method] === 'function')) {
+module.exports = args => {
+  if (!args.fs || !fsMethods.every(n => typeof args.fs[n] === 'function')) {
     throw new Error('ExpectedFileSystemMethodsToMakeChainRates');
   }
 
-  if (!lnd) {
+  if (!args.lnd) {
     throw new Error('ExpectedAuthenticatedLndToMakeChainRates');
   }
 
-  if (!path) {
+  if (!args.path) {
     throw new Error('ExpectedPricesFilePathToMakeChainRates');
   }
 
+  // Blocks and prices kept in one file would write over each other
+  if (!!args.blocks_path && args.blocks_path === args.path) {
+    throw new Error('ExpectedBlocksPathOtherThanPricesPathToMakeChainRates');
+  }
+
   const estimates = {provisional: {}, samples: Number()};
+
+  const kept = {};
 
   // A day the data cannot price is not derived again by this method
   const unsupported = new Map();
@@ -76,12 +84,14 @@ module.exports = ({fs, lnd, logger, path}) => {
     return getChainPrice({
       date,
       estimates,
-      fs,
-      lnd,
-      logger,
-      path,
+      kept,
       unsupported,
+      blocks_path: args.blocks_path,
+      fs: args.fs,
       known: shipped.rates,
+      lnd: args.lnd,
+      logger: args.logger,
+      path: args.path,
     },
     cbk);
   });

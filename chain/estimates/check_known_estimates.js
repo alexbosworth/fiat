@@ -2,7 +2,7 @@ const asyncAuto = require('async/auto');
 const asyncEachLimit = require('async/eachLimit');
 const {returnResult} = require('asyncjs-util');
 
-const {getBlockHash} = require('./../blocks');
+const {getBlockId} = require('./../blocks');
 
 const checkLimit = 4;
 const flatten = arr => [].concat(...arr);
@@ -27,8 +27,8 @@ const sortByDay = (a, b) => a.day.localeCompare(b.day);
   @returns via cbk or Promise
   {
     removed: [{
+      block_id: <Last Block Id Of the Removed Estimate Hex String>
       day: <Removed Estimate Day YYYY-MM-DD String>
-      hash: <Last Block Hash Of the Removed Estimate Hex String>
     }]
   }
 */
@@ -66,7 +66,7 @@ module.exports = ({estimates, height, lnd}, cbk) => {
 
         const checks = known.filter(({estimate}) => {
           // Exit early when there is no block to check against
-          if (!estimate.hash || !isArray(estimate.blocks)) {
+          if (!estimate.block_id || !isArray(estimate.blocks)) {
             return false;
           }
 
@@ -79,7 +79,7 @@ module.exports = ({estimates, height, lnd}, cbk) => {
         return cbk(null, checks);
       }],
 
-      // Check the hashes of the last blocks against the chain
+      // Check the ids of the last blocks against the chain
       check: ['recent', ({recent}, cbk) => {
         const removed = [];
 
@@ -96,14 +96,14 @@ module.exports = ({estimates, height, lnd}, cbk) => {
             return cbk();
           }
 
-          return getBlockHash({lnd, height: last}, (err, res) => {
+          return getBlockId({lnd, height: last}, (err, res) => {
             if (!!err) {
               return cbk(err);
             }
 
             // The chain was reorganized past the block the estimate used
-            if (res.hash !== estimate.hash) {
-              removed.push({day, hash: estimate.hash});
+            if (res.id !== estimate.block_id) {
+              removed.push({day, block_id: estimate.block_id});
 
               delete source[day];
             }

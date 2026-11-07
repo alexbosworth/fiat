@@ -11,6 +11,7 @@ const tempPath = require('./temp_path');
 
 const asJson = obj => JSON.stringify(obj, null, 2);
 const {assign} = Object;
+const {isArray} = Array;
 const {keys} = Object;
 const lastBlock = n => Array.isArray(n.blocks) ? n.blocks[1] : -Infinity;
 const provisionalDays = 2;
@@ -30,10 +31,10 @@ const types = ['priors', 'provisional', 'rates'];
     priors: {
       <Day YYYY-MM-DD String>: {
         [agreement]: <Spike Strengths Agreement With Prior Weights Number>
+        [block_id]: <Last Block Id Hex String>
         [blocks]: [<First Block Height Number>, <Last Block Height Number>]
         cents: <USD Cents Per BTC Number>
         [confidence]: <Best Position Score Over Best Alias Score Number>
-        [hash]: <Last Block Hash Hex String>
         [outputs]: <Payment Outputs Considered Count Number>
         [payments]: <Estimated Round USD Payments Count Number>
         [rivalry]: <Best Rival Position Score Over Best Score Number>
@@ -45,19 +46,19 @@ const types = ['priors', 'provisional', 'rates'];
     }
     [provisional]: {
       <Day YYYY-MM-DD String>: {
+        block_id: <Last Block Id Hex String>
         blocks: [<First Block Height Number>, <Last Block Height Number>]
         cents: <USD Cents Per BTC Number>
-        hash: <Last Block Hash Hex String>
         version: <Method Version String>
       }
     }
     rates: {
       <Day YYYY-MM-DD String>: {
         [agreement]: <Spike Strengths Agreement With Prior Weights Number>
+        [block_id]: <Last Block Id Hex String>
         [blocks]: [<First Block Height Number>, <Last Block Height Number>]
         cents: <USD Cents Per BTC Number>
         [confidence]: <Best Position Score Over Best Alias Score Number>
-        [hash]: <Last Block Hash Hex String>
         [outputs]: <Payment Outputs Considered Count Number>
         [payments]: <Estimated Round USD Payments Count Number>
         [rivalry]: <Best Rival Position Score Over Best Score Number>
@@ -68,8 +69,8 @@ const types = ['priors', 'provisional', 'rates'];
       }
     }
     [removed]: [{
+      block_id: <Last Block Id Hex String>
       day: <Day YYYY-MM-DD String>
-      hash: <Last Block Hash Hex String>
     }]
   }
 
@@ -78,10 +79,10 @@ const types = ['priors', 'provisional', 'rates'];
     priors: {
       <Day YYYY-MM-DD String>: {
         [agreement]: <Spike Strengths Agreement With Prior Weights Number>
+        [block_id]: <Last Block Id Hex String>
         [blocks]: [<First Block Height Number>, <Last Block Height Number>]
         cents: <USD Cents Per BTC Number>
         [confidence]: <Best Position Score Over Best Alias Score Number>
-        [hash]: <Last Block Hash Hex String>
         [outputs]: <Payment Outputs Considered Count Number>
         [payments]: <Estimated Round USD Payments Count Number>
         [rivalry]: <Best Rival Position Score Over Best Score Number>
@@ -93,19 +94,19 @@ const types = ['priors', 'provisional', 'rates'];
     }
     provisional: {
       <Day YYYY-MM-DD String>: {
+        block_id: <Last Block Id Hex String>
         blocks: [<First Block Height Number>, <Last Block Height Number>]
         cents: <USD Cents Per BTC Number>
-        hash: <Last Block Hash Hex String>
         version: <Method Version String>
       }
     }
     rates: {
       <Day YYYY-MM-DD String>: {
         [agreement]: <Spike Strengths Agreement With Prior Weights Number>
+        [block_id]: <Last Block Id Hex String>
         [blocks]: [<First Block Height Number>, <Last Block Height Number>]
         cents: <USD Cents Per BTC Number>
         [confidence]: <Best Position Score Over Best Alias Score Number>
-        [hash]: <Last Block Hash Hex String>
         [outputs]: <Payment Outputs Considered Count Number>
         [payments]: <Estimated Round USD Payments Count Number>
         [rivalry]: <Best Rival Position Score Over Best Score Number>
@@ -117,9 +118,7 @@ const types = ['priors', 'provisional', 'rates'];
     }
   }
 */
-module.exports = (args, cbk) => {
-  const {fs, path, priors, provisional, rates, removed} = args;
-
+module.exports = ({fs, path, priors, provisional, rates, removed}, cbk) => {
   return new Promise((resolve, reject) => {
     return asyncAuto({
       // Check arguments
@@ -147,7 +146,7 @@ module.exports = (args, cbk) => {
           return cbk([400, 'ExpectedRatesToPutPricesFile']);
         }
 
-        if (removed !== undefined && !Array.isArray(removed)) {
+        if (removed !== undefined && !isArray(removed)) {
           return cbk([400, 'ExpectedRemovedPricesToPutPricesFile']);
         }
 
@@ -212,11 +211,13 @@ module.exports = (args, cbk) => {
         });
 
         // A price from blocks that were replaced is removed for good
-        (removed || []).forEach(({day, hash}) => {
+        (removed || []).forEach(removal => {
           types.filter(type => {
-            return !!merged[type][day] && merged[type][day].hash === hash;
+            const price = merged[type][removal.day];
+
+            return !!price && price.block_id === removal.block_id;
           })
-          .forEach(type => delete merged[type][day]);
+          .forEach(type => delete merged[type][removal.day]);
         });
 
         return cbk(null, merged);

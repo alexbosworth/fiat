@@ -52,7 +52,6 @@ module.exports = (args, cbk) => {
       // Binary search for the first height with a median time at or after
       search: ['validate', ({}, cbk) => {
         const bounds = {high: args.height + 1, low: args.low};
-        const {lnd} = args;
         const times = args.times || new Map();
 
         // A binary search takes a bounded number of steps
@@ -66,7 +65,12 @@ module.exports = (args, cbk) => {
 
           const mid = floor((bounds.low + bounds.high) / 2);
 
-          return getMedianTime({lnd, times, height: mid}, (err, res) => {
+          return getMedianTime({
+            times,
+            height: mid,
+            lnd: args.lnd,
+          },
+          (err, res) => {
             if (!!err) {
               return cbk(err);
             }

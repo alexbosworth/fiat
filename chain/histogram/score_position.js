@@ -44,18 +44,16 @@ module.exports = args => {
     throw new Error('ExpectedNoiseStrengthOfEveryBinToScorePosition');
   }
 
-  const {amounts, strengths, weights} = args;
-
   const binsPerDecade = args.bins_per_decade;
   const dollarBin = args.dollar_bin;
 
-  const centers = amounts.map(usd => {
+  const centers = args.amounts.map(usd => {
     return dollarBin + round(log10(usd) * binsPerDecade);
   });
 
   // An amount is observable when its whole spike is within the histogram
   const observable = centers.map(center => {
-    const high = center + kernelBins < strengths.length;
+    const high = center + kernelBins < args.strengths.length;
     const low = center - kernelBins >= args.min_bin;
 
     return high && low;
@@ -68,15 +66,15 @@ module.exports = args => {
       return Number();
     }
 
-    return strengths[center] - args.noise[center];
+    return args.strengths[center] - args.noise[center];
   });
 
-  const observedWeight = weights.reduce((sum, weight, index) => {
+  const observedWeight = args.weights.reduce((sum, weight, index) => {
     return sum + (!observable[index] ? 0 : weight);
   },
   Number());
 
-  const totalWeight = weights.reduce((sum, weight) => sum + weight, Number());
+  const totalWeight = args.weights.reduce((sum, n) => sum + n, Number());
 
   const observed = above.map(n => max(Number(), n));
 
@@ -88,7 +86,7 @@ module.exports = args => {
     observable,
     evidence: !totalWeight ? 0 : observedWeight / totalWeight,
     is_pattern: !!strongest && spikes.length >= minPatternSpikes,
-    score: above.reduce((sum, n, i) => sum + n * weights[i], Number()),
+    score: above.reduce((sum, n, i) => sum + n * args.weights[i], Number()),
     strengths: observed,
   };
 };

@@ -17,12 +17,10 @@ const {kernelBins} = require('./../constants');
   }
 */
 module.exports = args => {
-  const {noise, shifts, strengths, weights} = args;
-
-  const score = shifts.reduce((sum, shift, index) => {
+  const score = args.shifts.reduce((sum, shift, index) => {
     const center = args.dollar_bin + shift;
 
-    const isAbove = center + kernelBins >= strengths.length;
+    const isAbove = center + kernelBins >= args.strengths.length;
     const isBelow = center - kernelBins < args.min_bin;
 
     // Exit early when the whole spike of the amount is not in the histogram
@@ -30,7 +28,9 @@ module.exports = args => {
       return sum;
     }
 
-    return sum + (strengths[center] - noise[center]) * weights[index];
+    const above = args.strengths[center] - args.noise[center];
+
+    return sum + above * args.weights[index];
   },
   Number());
 

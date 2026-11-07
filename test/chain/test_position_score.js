@@ -25,43 +25,56 @@ const excess = [...Array(800).keys()].map(n => {
 const {noise} = noiseStrengths({excess, min_bin: minBin});
 const {strengths} = spikeStrengths({excess});
 
-test('A position is scored by its whole spikes above their noise', () => {
-  // Positions across the histogram and past both of its ends
-  const bins = [...Array(900).keys()].map(n => n - 50);
+// Positions across the histogram and past both of its ends
+const bins = [...Array(900).keys()].map(n => n - 50);
 
-  bins.forEach(bin => {
-    // A spike counts when all of it is within the histogram
-    const expected = shifts.reduce((sum, shift, i) => {
-      const center = bin + shift;
+// The score of a position from its whole spikes above their noise
+const scoreAt = bin => shifts.reduce((sum, shift, i) => {
+  const center = bin + shift;
 
-      const isHigh = center + kernelBins >= excess.length;
-      const isLow = center - kernelBins < minBin;
+  const isHigh = center + kernelBins >= excess.length;
+  const isLow = center - kernelBins < minBin;
 
-      // The spike is the excess around its center, weighted by the kernel
-      const spike = spikeKernel.reduce((total, weight, offset) => {
-        return total + weight * (excess[center + offset - half] || 0);
-      },
-      0);
+  // The spike is the excess around its center, weighted by the kernel
+  const spike = spikeKernel.reduce((total, weight, offset) => {
+    return total + weight * (excess[center + offset - half] || 0);
+  },
+  0);
 
-      const above = isHigh || isLow ? 0 : spike - noise[center];
+  // A spike counts when all of it is within the histogram
+  const above = isHigh || isLow ? 0 : spike - noise[center];
 
-      return sum + above * weights[i];
-    },
-    0);
+  return sum + above * weights[i];
+},
+0);
 
-    const {score} = method({
+// Score the positions of a dollar at bins
+const scoresAt = args => ({
+  scores: args.bins.map(bin => {
+    return method({
       noise,
       shifts,
       strengths,
       weights,
       dollar_bin: bin,
       min_bin: minBin,
-    });
+    })
+    .score;
+  }),
+});
 
-    deepEqual(score, expected, 'Got expected score');
+const tests = [
+  {
+    args: {bins},
+    description: 'A position is scored by its whole spikes above their noise',
+    expected: {scores: bins.map(scoreAt)},
+  },
+];
+
+tests.forEach(({args, description, expected}) => {
+  return test(description, () => {
+    deepEqual(scoresAt(args), expected, 'Got expected scores');
 
     return;
   });
-
-  return;
 });

@@ -1,4 +1,3 @@
-const {deepEqual} = require('node:assert').strict;
 const {rejects} = require('node:assert').strict;
 const test = require('node:test');
 
@@ -11,31 +10,39 @@ const genesis = Date.parse('2026-01-01T00:00:00.000Z') / 1000;
 
 const makeChain = args => makeFixtureChain(Object.assign({genesis}, args));
 
-test('Errors fetching blocks while bridging are passed back', async () => {
-  const chain = makeChain({});
+const chain = makeChain({});
 
-  const store = makeStore({chain, known: [0]});
+// LND that cannot get the blocks of the days in between
+const failingLnd = Object.assign({}, chain.lnd, {
+  blocks: Object.assign({}, chain.lnd.blocks, {
+    getBlock: ({}, cbk) => cbk({details: 'err'}),
+  }),
+});
 
-  // The blocks of the days in between cannot be fetched
-  const lnd = Object.assign({}, chain.lnd, {
-    blocks: Object.assign({}, chain.lnd.blocks, {
-      getBlock: ({}, cbk) => cbk({details: 'err'}),
-    }),
-  });
-
-  await rejects(
-    method({
-      lnd,
+const tests = [
+  {
+    args: {
       date: chain.day(2),
-      get_prices: store.get_prices,
+      get_prices: makeStore({chain, known: [0]}).get_prices,
       height: chain.tip,
-      put_price: store.put_price,
-    }),
-    [503, 'UnexpectedErrorWhenGettingChainBlock', {err: {details: 'err'}}],
-    'The error fetching a block is passed back'
-  );
+      lnd: failingLnd,
+      put_price: () => {
+        throw new Error('UnexpectedPriceRememberedAfterFailure');
+      },
+    },
+    description: 'Errors fetching blocks while bridging are passed back',
+    error: [
+      503,
+      'UnexpectedErrorWhenGettingChainBlock',
+      {err: {details: 'err'}},
+    ],
+  },
+];
 
-  deepEqual(store.puts, [], 'Nothing is remembered');
+tests.forEach(({args, description, error}) => {
+  return test(description, async () => {
+    await rejects(method(args), error, 'Got expected error');
 
-  return;
+    return;
+  });
 });

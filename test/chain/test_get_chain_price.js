@@ -3,104 +3,149 @@ const {rejects} = require('node:assert').strict;
 const test = require('node:test');
 
 const {makeChain} = require('./../fixtures');
+const {makeFs} = require('./../fixtures');
 const method = require('./../../chain/estimates/get_chain_price');
 const {methodVersion} = require('./../../chain/known');
 
+const blocksPath = '/data/blocks.json';
+const damaged = 'not json';
 const genesis = Date.parse('2030-01-01T00:00:00.000Z') / 1000;
 const path = '/data/prices.json';
+const shippedCents = 123456789;
+const storedCents = 4012300;
 const {version} = methodVersion({});
 
-// An in-memory file system
-const makeFs = ({files}) => ({
-  getFile: (path, cbk) => {
-    const missing = {code: 'ENOENT'};
+const chain = makeChain({genesis});
 
-    return !files[path] ? cbk(missing) : cbk(null, Buffer.from(files[path]));
+const date = chain.day_name(1);
+const nextDate = chain.day_name(2);
+
+// A file system with a prices file that cannot be parsed and cannot change
+const damagedFs = {getFile: (file, cbk) => cbk(null, Buffer.from(damaged))};
+
+// LND for the chain that fails to get blocks
+const failingLnd = {
+  blocks: Object.assign({}, chain.lnd.blocks, {
+    getBlock: ({}, cbk) => cbk({details: 'err'}),
+  }),
+  chain: chain.lnd.chain,
+};
+
+// A file system that cannot be read from or written to
+const unusedFs = {
+  getFile: () => {
+    throw new Error('UnexpectedReadOfFile');
   },
-  makeDirectory: (path, cbk) => cbk(),
-  renameFile: (from, to, cbk) => {
-    files[to] = files[from];
+};
 
-    delete files[from];
-
-    return cbk();
-  },
-  writeFile: (path, contents, cbk) => {
-    files[path] = contents;
-
-    return cbk();
-  },
-});
-
-test('A shipped price is returned without asking LND', async () => {
-  const chain = makeChain({genesis});
-  const files = {};
-
-  const date = chain.day_name(1);
-
-  const res = await method({
+const makeArgs = overrides => {
+  const args = {
     date,
     path,
     estimates: {provisional: {}, samples: 0},
-    fs: makeFs({files}),
-    known: {[date]: {version, cents: 123456789}},
+    fs: {},
+    known: {[date]: {version, cents: shippedCents}},
     lnd: {},
-  });
+  };
 
-  deepEqual(res, {cents: 123456789}, 'The shipped price is returned');
-  deepEqual(chain.calls.blocks, 0, 'No blocks are fetched');
-  deepEqual(files, {}, 'Nothing is written');
+  Object.keys(overrides).forEach(k => args[k] = overrides[k]);
 
-  return;
-});
+  return args;
+};
 
-test('A damaged prices file does not stop a shipped price', async () => {
-  const chain = makeChain({genesis});
-  const files = {[path]: 'not json'};
-
-  const date = chain.day_name(1);
-
-  const lookup = date => method({
-    date,
-    path,
-    estimates: {provisional: {}, samples: 0},
-    fs: makeFs({files}),
-    known: {[chain.day_name(1)]: {version, cents: 123456789}},
-    lnd: chain.lnd,
-  });
-
-  deepEqual(await lookup(date), {cents: 123456789}, 'The price is returned');
-
-  await rejects(
-    lookup(chain.day_name(2)),
-    [503, 'FailedToParsePricesFile'],
-    'A day that needs the prices file fails'
-  );
-
-  deepEqual(files[path], 'not json', 'The damaged file is left alone');
-
-  return;
-});
-
-test('A date that is not valid is not looked up', async () => {
-  const chain = makeChain({genesis});
-  const files = {};
-
-  const date = chain.day_name(1);
-
-  // A date that starts with a shipped day but is not a date
-  await rejects(
-    method({
-      path,
-      date: `${date}not-a-date`,
-      estimates: {provisional: {}, samples: 0},
-      fs: makeFs({files}),
-      known: {[date]: {version, cents: 123456789}},
-      lnd: {},
+const tests = [
+  {
+    args: makeArgs({date: undefined}),
+    description: 'A date is required',
+    error: [400, 'ExpectedDateToGetChainPrice'],
+  },
+  {
+    args: makeArgs({date: `${date}not-a-date`}),
+    description: 'A date has to be valid',
+    error: [400, 'ExpectedValidDateToGetChainPrice'],
+  },
+  {
+    args: makeArgs({estimates: undefined}),
+    description: 'Estimates are required',
+    error: [400, 'ExpectedKnownEstimatesToGetChainPrice'],
+  },
+  {
+    args: makeArgs({fs: undefined}),
+    description: 'File system methods are required',
+    error: [400, 'ExpectedFileSystemMethodsToGetChainPrice'],
+  },
+  {
+    args: makeArgs({lnd: undefined}),
+    description: 'LND is required',
+    error: [400, 'ExpectedAuthenticatedLndToGetChainPrice'],
+  },
+  {
+    args: makeArgs({path: undefined}),
+    description: 'A prices file path is required',
+    error: [400, 'ExpectedPricesFilePathToGetChainPrice'],
+  },
+  {
+    args: makeArgs({blocks_path: blocksPath}),
+    description: 'Kept blocks are required with a blocks path',
+    error: [400, 'ExpectedKeptBlocksToGetChainPrice'],
+  },
+  {
+    args: makeArgs({}),
+    description: 'A shipped price is returned without using LND or files',
+    expected: {cents: shippedCents},
+  },
+  {
+    args: makeArgs({fs: damagedFs}),
+    description: 'A damaged prices file does not stop a shipped price',
+    expected: {cents: shippedCents},
+  },
+  {
+    args: makeArgs({date: nextDate, fs: damagedFs, lnd: chain.lnd}),
+    description: 'A damaged prices file stops a price that needs the file',
+    error: [503, 'FailedToParsePricesFile'],
+  },
+  {
+    args: makeArgs({
+      blocks_path: blocksPath,
+      date: nextDate,
+      estimates: {
+        priors: {},
+        provisional: {},
+        rates: {[nextDate]: {version, cents: storedCents}},
+        samples: 0,
+      },
+      fs: unusedFs,
+      kept: {},
+      lnd: chain.lnd,
     }),
-    [400, 'ExpectedValidDateToGetChainPrice'],
-    'A date has to be valid'
-  );
+    description: 'Kept blocks are not read for a day with a stored price',
+    expected: {cents: storedCents, is_provisional: false},
+  },
+  {
+    args: makeArgs({
+      blocks_path: blocksPath,
+      date: nextDate,
+      fs: makeFs({files: {}}),
+      kept: {},
+      lnd: failingLnd,
+    }),
+    description: 'A failure to get blocks for a price is passed back',
+    error: [
+      503,
+      'UnexpectedErrorWhenGettingChainBlock',
+      {err: {details: 'err'}},
+    ],
+  },
+];
 
-  return;
+tests.forEach(({args, description, error, expected}) => {
+  return test(description, async () => {
+    if (!!error) {
+      await rejects(method(args), error, 'Got expected error');
+    } else {
+      deepEqual(await method(args), expected, 'Got expected price');
+    }
+
+    return;
+  });
 });

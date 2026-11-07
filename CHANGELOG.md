@@ -1,5 +1,10 @@
 # Versions
 
+## 3.1.0
+
+- `chainRates`: Add `blocks_path` to save recent blocks in a file, so that
+    later runs only fetch the blocks that are new
+
 ## 3.0.0
 
 - Add `chainRates` to make a `getChainRate` method that gets the USD price of

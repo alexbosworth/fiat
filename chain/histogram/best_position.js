@@ -24,8 +24,6 @@ const {round} = Math;
   }
 */
 module.exports = args => {
-  const {noise, strengths, weights} = args;
-
   // The bins of the amounts above a dollar bin are the same at every position
   const shifts = args.amounts.map(usd => {
     return round(log10(usd) * args.bins_per_decade);
@@ -33,12 +31,12 @@ module.exports = args => {
 
   const scores = args.bins.map(bin => {
     const {score} = positionScore({
-      noise,
       shifts,
-      strengths,
-      weights,
       dollar_bin: bin,
       min_bin: args.min_bin,
+      noise: args.noise,
+      strengths: args.strengths,
+      weights: args.weights,
     });
 
     return {bin, score};

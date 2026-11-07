@@ -16,11 +16,11 @@ const rounded = n => Math.round(n * 1e3) / 1e3;
   {
     estimate: {
       [agreement]: <Spike Strengths Agreement With Prior Weights Number>
+      [block_id]: <Last Block Id Hex String>
       blocks: [<First Block Height Number>, <Last Block Height Number>]
       cents: <USD Cents Per BTC Number>
       [confidence]: <Best Position Score Over Best Alias Score Number>
       date: <Day YYYY-MM-DD String>
-      [hash]: <Last Block Hash Hex String>
       [is_provisional]: <Price Is For An Incomplete Day Bool>
       [is_sample]: <Price Is A Rough Estimate From Sample Blocks Bool>
       [is_unguided]: <Price Was Estimated Without a Neighboring Guide Bool>

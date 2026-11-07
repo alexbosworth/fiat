@@ -1,5 +1,5 @@
 const {deepEqual} = require('node:assert').strict;
-const {ok} = require('node:assert').strict;
+const {isDeepStrictEqual} = require('util');
 const {rejects} = require('node:assert').strict;
 const test = require('node:test');
 
@@ -9,6 +9,7 @@ const {transactionFromComponents} = require('@alexbosworth/blockchain');
 
 const method = require('./../../chain/estimates/get_price_from_blocks');
 
+const {abs} = Math;
 const blockHeaderByteLength = 80;
 const bufferAsHex = buffer => buffer.toString('hex');
 const centsPerDollar = 100;
@@ -111,12 +112,97 @@ const makeLnd = overrides => {
   return lnd;
 };
 
+// A price derived from blocks, measured against the price of the payments
+const priceOf = async args => {
+  const res = await method(args);
+
+  const cents = price * centsPerDollar;
+
+  return {
+    drift: res.drift,
+    is_agreeing: res.agreement > 0.5,
+    is_beating_aliases: res.confidence > 1,
+    is_covered: res.coverage > 0,
+    is_derived: abs(res.cents / cents - 1) < 0.005,
+    is_observable: res.evidence > 0.9,
+    is_outputs_counted: res.outputs >= res.transactions,
+    is_payments_counted: res.payments > 0,
+    is_rivalry_measured: res.rivalry < 0.9,
+    is_rough_close: abs(res.rough_cents / cents - 1) < 0.02,
+    is_round_steady: res.round_shift < 0.01,
+    is_significant: res.significance > 4,
+    is_spread_tight: res.dispersion >= 0 && res.dispersion < 0.01,
+    is_stable: res.stability < 0.01,
+    is_widened: res.is_widened,
+    transactions: res.transactions,
+  };
+};
+
+// Get a price from blocks twice, the second time from the blocks kept from
+// the first time, with the blocks that were fetched and kept
+const priceTwice = async args => {
+  const fetched = [];
+
+  const lnd = makeLnd({
+    getBlock: (req, cbk) => {
+      const height = req.block_hash.readUInt32LE(0);
+
+      fetched.push(height);
+
+      return cbk(null, {raw_block: hexAsBuffer(blocks[height])});
+    },
+  });
+
+  const first = await method(Object.assign({}, args, {lnd}));
+
+  const again = await method(Object.assign({}, args, {
+    lnd,
+    heights: args.heights.slice().reverse(),
+  }));
+
+  const kept = args.blocks.get(args.heights[0]);
+
+  return {
+    fetched: fetched.slice().sort(),
+    is_kept_outputs: kept.outputs.length > 1000,
+    is_kept_transactions: kept.transactions > 1000,
+    is_same_again: isDeepStrictEqual(first, again),
+    kept: [...args.blocks.keys()].sort(),
+    kept_time: kept.time,
+  };
+};
+
 const makeArgs = overrides => {
   const args = {heights: [100, 101], lnd: makeLnd({})};
 
   Object.keys(overrides).forEach(k => args[k] = overrides[k]);
 
   return args;
+};
+
+const makeExpected = overrides => {
+  const expected = {
+    drift: undefined,
+    is_agreeing: true,
+    is_beating_aliases: true,
+    is_covered: true,
+    is_derived: true,
+    is_observable: true,
+    is_outputs_counted: true,
+    is_payments_counted: true,
+    is_rivalry_measured: true,
+    is_rough_close: true,
+    is_round_steady: true,
+    is_significant: true,
+    is_spread_tight: true,
+    is_stable: true,
+    is_widened: undefined,
+    transactions: 2402,
+  };
+
+  Object.keys(overrides).forEach(k => expected[k] = overrides[k]);
+
+  return expected;
 };
 
 const tests = [
@@ -183,85 +269,50 @@ const tests = [
   {
     args: makeArgs({}),
     description: 'The price is derived from the payments in blocks',
-    expected: {transactions: 2402},
+    expected: makeExpected({}),
+    subject: priceOf,
   },
   {
     args: makeArgs({max_price: 60000, min_price: 40000}),
     description: 'The price is derived from the payments within a window',
-    expected: {transactions: 2402},
+    expected: makeExpected({}),
+    subject: priceOf,
   },
   {
     args: makeArgs({max_price: 40000, min_price: 30000}),
     description: 'A window that misses the price is widened to find it',
-    expected: {is_widened: true, transactions: 2402},
+    expected: makeExpected({is_widened: true}),
+    subject: priceOf,
   },
   {
     args: makeArgs({max_price: 30000, min_price: 20000}),
     description: 'A window around an alias is widened to find the price',
-    expected: {is_widened: true, transactions: 2402},
+    expected: makeExpected({is_widened: true}),
+    subject: priceOf,
+  },
+  {
+    args: makeArgs({blocks: new Map()}),
+    description: 'Blocks kept in a map are not retrieved again',
+    expected: {
+      fetched: [100, 101],
+      is_kept_outputs: true,
+      is_kept_transactions: true,
+      is_same_again: true,
+      kept: [100, 101],
+      kept_time: 0,
+    },
+    subject: priceTwice,
   },
 ];
 
-tests.forEach(({args, description, error, expected}) => {
+tests.forEach(({args, description, error, expected, subject}) => {
   return test(description, async () => {
     if (!!error) {
       await rejects(method(args), error, 'Got expected error');
-
-      return;
+    } else {
+      deepEqual(await subject(args), expected, 'Got expected result');
     }
-
-    const res = await method(args);
-
-    const cents = price * centsPerDollar;
-
-    deepEqual(res.transactions, expected.transactions, 'Transactions counted');
-    deepEqual(res.drift, undefined, 'Too few blocks to measure a drift');
-    ok(res.stability < 0.01, 'The refinement is stable');
-    ok(res.evidence > 0.9, 'The pattern is observable');
-    ok(res.round_shift < 0.01, 'Round values do not move the price');
-    ok(res.outputs >= res.transactions, 'Outputs are counted');
-    ok(res.payments > 0, 'Round payments were counted');
-    ok(res.significance > 4, 'The payment peak is significant');
-    ok(res.confidence > 1, 'The price beats its aliases');
-    ok(res.agreement > 0.5, 'Spike strengths agree with the prior');
-    ok(res.coverage > 0, 'Coverage is measured');
-    ok(res.rivalry < 0.9, 'Rivalry is measured');
-    ok(res.dispersion >= 0 && res.dispersion < 0.01, 'Close rates: no spread');
-    deepEqual(res.is_widened, expected.is_widened, 'Widened as expected');
-    ok(Math.abs(res.rough_cents / cents - 1) < 0.02, 'Rough price is close');
-    ok(Math.abs(res.cents / cents - 1) < 0.005, 'Price is derived');
 
     return;
   });
-});
-
-test('Blocks kept in a map are not retrieved again', async () => {
-  const fetched = [];
-
-  const lnd = makeLnd({
-    getBlock: (args, cbk) => {
-      const height = args.block_hash.readUInt32LE(0);
-
-      fetched.push(height);
-
-      return cbk(null, {raw_block: hexAsBuffer(blocks[height])});
-    },
-  });
-
-  const kept = new Map();
-
-  const res = await method({lnd, blocks: kept, heights: [100, 101]});
-
-  deepEqual(fetched.slice().sort(), [100, 101], 'Each block is retrieved');
-  deepEqual([...kept.keys()].sort(), [100, 101], 'Retrieved blocks are kept');
-  deepEqual(kept.get(100).time, 0, 'The time of a block is kept');
-  ok(kept.get(100).outputs.length > 1000, 'Payment outputs are kept');
-  ok(kept.get(100).transactions > 1000, 'Payment transactions are counted');
-
-  const again = await method({lnd, blocks: kept, heights: [101, 100]});
-
-  deepEqual(fetched.length, 2, 'Kept blocks are not retrieved again');
-  deepEqual(again, res, 'The estimate from kept blocks is the same');
-
-  return;
 });
